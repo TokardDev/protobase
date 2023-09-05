@@ -16,23 +16,13 @@ possibly an sd card reader
 
 4 tacts buttons
 
-## features
-LED matrix control
-Animations
-Reading from SD card
-Face changing via buttons
-Customizable faces
-Direct connection to LED panels via custom hub
-Gerber files available for DIY-ers
-Option to purchase pre-programmed hubs
-
 ## Other
 
 I had a great time working on this code and it's definitely one of my biggest personal projects ! 
 
 I would like to give a big thank you to PanickingLynx for his help with the hardware aspect of this project! They did a similar project that inspired me a lot, don't hesitate to check ! 
 
-I want to add that this project is completely open-source and the sale of hubs is mainly to open up the world of protogens to more people, support my work if someone decides to, and to offer a product made for this purpose, not just disguised dropshipping like some others. If anyone needs any help, I am always open to questions and happy to help in any way I can.
+I want to add that this project is completely open-source and is mainly to open up the world of protogens to more people.
 
 Making my project useful for others is truly something fantastic for me. I am happy to have the opportunity to share and help someone. 
 
@@ -42,8 +32,8 @@ If anyone uses my code and creates something with it, I would be interested to s
 #### Thanks for using my code !
 
 
-Discord : ``Tokard#8534``
+Discord : ``@Tokageki``
 
-Instagram : ``Tokageki_``
+Instagram : ``@Tokageki_``
 
 Anywhere else : ``Tokageki``
