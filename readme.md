@@ -1,4 +1,6 @@
 # ProtoBase
+(this code may need cleanup)
+
 ## Intro :
 This code is designed to work with an Arduino board, specifically an ESP-32 WROOM. It utilizes a custom hub to connect directly to LED panels for control.
 
