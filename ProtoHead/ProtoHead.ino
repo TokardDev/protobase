@@ -56,15 +56,21 @@ const uint16_t BLINK_FRAME_MS   = 45;    // durée de chaque étape du clignemen
 const uint32_t BLINK_MIN_MS     = 2500;  // intervalle aléatoire entre deux clignements
 const uint32_t BLINK_MAX_MS     = 6000;
 
-// Ce que fait chaque bouton du gant (0..3).
-enum ActionType : uint8_t { ACT_FACE, ACT_BSOD, ACT_BRIGHTNESS };
+// Ce que fait chaque bouton du gant (0..3), en appui court et en appui long.
+enum ActionType : uint8_t { ACT_NONE, ACT_FACE, ACT_BSOD, ACT_BRIGHTNESS };
 struct ButtonAction { ActionType type; uint8_t face; };
 
 const ButtonAction BUTTONS[] = {
-  { ACT_FACE,       FACE_NEUTRAL },
-  { ACT_FACE,       FACE_ANGRY },
-  { ACT_BSOD,       0 },
-  { ACT_BRIGHTNESS, 0 },  // à remplacer par { ACT_FACE, FACE_xxx } quand la 4e face existera
+  { ACT_FACE, FACE_NEUTRAL },
+  { ACT_FACE, FACE_ANGRY },
+  { ACT_BSOD, 0 },
+  { ACT_FACE, FACE_UWU },
+};
+const ButtonAction LONG_PRESS[] = {
+  { ACT_BRIGHTNESS, 0 },  // maintenir le bouton 0 : luminosité suivante
+  { ACT_NONE, 0 },
+  { ACT_NONE, 0 },
+  { ACT_NONE, 0 },
 };
 const uint8_t BUTTON_COUNT = sizeof(BUTTONS) / sizeof(BUTTONS[0]);
 
@@ -201,12 +207,15 @@ void updateBsod(uint32_t now) {
 /* ---------------------------------------------------------------------------
    Commandes du gant
    --------------------------------------------------------------------------- */
-void handleButton(uint8_t button) {
+void handleButton(uint8_t button, bool longPress) {
   if (button >= BUTTON_COUNT) return;
-  const ButtonAction &a = BUTTONS[button];
-  Serial.printf("bouton %u\n", button);
+  const ButtonAction &a = longPress ? LONG_PRESS[button] : BUTTONS[button];
+  Serial.printf("bouton %u%s\n", button, longPress ? " (long)" : "");
 
   switch (a.type) {
+    case ACT_NONE:
+      break;
+
     case ACT_FACE:
       if (a.face >= FACE_COUNT) return;
       pendingFace = a.face;
@@ -260,7 +269,8 @@ void processPackets() {
   while (xQueueReceive(rxQueue, &p, 0) == pdTRUE) {
     if (p.seq == lastSeq) continue;  // doublon (le gant envoie chaque appui plusieurs fois)
     lastSeq = p.seq;
-    if (p.cmd == CMD_BUTTON) handleButton(p.arg);
+    if (p.cmd == CMD_BUTTON)     handleButton(p.arg, false);
+    if (p.cmd == CMD_LONG_PRESS) handleButton(p.arg, true);
   }
 }
 

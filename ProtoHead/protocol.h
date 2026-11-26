@@ -9,7 +9,8 @@
 #define PROTO_CHANNEL 1      // canal WiFi, identique des deux côtés
 
 enum Command : uint8_t {
-  CMD_BUTTON = 1,  // arg = numéro du bouton appuyé (0..3). C'est la tête qui décide quoi en faire.
+  CMD_BUTTON     = 1,  // arg = numéro du bouton appuyé (0..3). C'est la tête qui décide quoi en faire.
+  CMD_LONG_PRESS = 2,  // arg = numéro du bouton maintenu (envoyé en plus de CMD_BUTTON)
 };
 
 struct __attribute__((packed)) Packet {

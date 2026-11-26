@@ -39,6 +39,7 @@ COVERAGE = 0.12        # part min d'une cellule 64x32 allumée pour allumer la L
 FACES = {
     "neutral": ["clin0.png", "clin1.png", "clin2.png"],
     "angry":   ["Fache.png", "Fache1.png", "Fache2.png"],
+    "uwu":     ["uwu0.png"],  # >w< : yeux déjà plissés, donc une seule image (pas de clignement)
 }
 
 

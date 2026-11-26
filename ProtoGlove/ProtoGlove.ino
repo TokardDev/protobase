@@ -16,8 +16,9 @@
 const uint8_t BUTTON_PINS[] = {21, 19, 25, 33};  // bouton 0, 1, 2, 3
 const uint8_t BUTTON_COUNT  = sizeof(BUTTON_PINS);
 
-const uint16_t DEBOUNCE_MS = 25;
-const uint8_t  REPEATS     = 3;   // le broadcast n'a pas d'accusé de réception : on envoie 3 fois
+const uint16_t DEBOUNCE_MS   = 25;
+const uint16_t LONG_PRESS_MS = 800;  // au-delà, l'appui compte aussi comme appui long
+const uint8_t  REPEATS       = 3;    // le broadcast n'a pas d'accusé de réception : on envoie 3 fois
 
 const uint8_t BROADCAST[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
@@ -25,18 +26,20 @@ struct Button {
   bool     stable;      // état validé (true = relâché, à cause du pull-up)
   bool     raw;         // dernière lecture
   uint32_t changedAt;   // date du dernier changement de lecture
+  uint32_t pressedAt;   // date de l'appui validé
+  bool     longSent;    // appui long déjà envoyé pour cet appui
 };
 Button buttons[BUTTON_COUNT];
 
 uint8_t seq;
 
-void sendButton(uint8_t index) {
-  Packet p = {PROTO_MAGIC, PROTO_ID, ++seq, CMD_BUTTON, index};
+void sendCommand(Command cmd, uint8_t index) {
+  Packet p = {PROTO_MAGIC, PROTO_ID, ++seq, cmd, index};
   for (uint8_t i = 0; i < REPEATS; i++) {
     esp_now_send(BROADCAST, (const uint8_t *)&p, sizeof(p));
     delay(5);
   }
-  Serial.printf("bouton %u envoyé (seq %u)\n", index, seq);
+  Serial.printf("bouton %u%s envoyé (seq %u)\n", index, cmd == CMD_LONG_PRESS ? " (long)" : "", seq);
 }
 
 void setup() {
@@ -44,7 +47,7 @@ void setup() {
 
   for (uint8_t i = 0; i < BUTTON_COUNT; i++) {
     pinMode(BUTTON_PINS[i], INPUT_PULLUP);
-    buttons[i] = {true, true, 0};
+    buttons[i] = {true, true, 0, 0, false};
   }
 
   WiFi.mode(WIFI_STA);
@@ -80,7 +83,14 @@ void loop() {
       b.changedAt = now;
     } else if (r != b.stable && now - b.changedAt >= DEBOUNCE_MS) {
       b.stable = r;
-      if (!r) sendButton(i);  // front descendant = appui
+      if (!r) {  // front descendant = appui
+        b.pressedAt = now;
+        b.longSent = false;
+        sendCommand(CMD_BUTTON, i);
+      }
+    } else if (!b.stable && !b.longSent && now - b.pressedAt >= LONG_PRESS_MS) {
+      b.longSent = true;
+      sendCommand(CMD_LONG_PRESS, i);
     }
   }
   delay(2);
