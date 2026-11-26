@@ -28,6 +28,7 @@ Free GPIOs on the shield's breakout header: 13, 14, 23, 32, 33 (input/output) an
 2. Libraries (Library Manager):
    - *ESP32 HUB75 LED MATRIX PANEL DMA Display* (mrcodetastic)
    - *Adafruit GFX Library*
+   - *ESP Async WebServer* and *Async TCP*, both by ESP32Async (upload page)
 3. Copy `ProtoHead/secrets.example.h` to `ProtoHead/secrets.h` and set the upload WiFi password.
 4. Flash `ProtoHead/` on the head ESP32 and `ProtoGlove/` on the glove ESP32.
 

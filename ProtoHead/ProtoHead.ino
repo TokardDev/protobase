@@ -9,7 +9,8 @@
     layers.h    structures Layer / FaceDef
     protocol.h  format des messages gant -> tête (identique dans ProtoGlove/)
 
-  Libs : "ESP32 HUB75 LED MATRIX PANEL DMA Display" (mrcodetastic) + "Adafruit GFX Library".
+  Libs : "ESP32 HUB75 LED MATRIX PANEL DMA Display" (mrcodetastic) + "Adafruit GFX Library"
+         + "ESP Async WebServer" et "Async TCP" (les deux par ESP32Async).
   Pas besoin de modifier la lib : le brochage du shield est défini ci-dessous.
 
   Mode upload (appui long sur le bouton 3 du gant) : la tête crée un WiFi "Proto-XXXX",
@@ -23,7 +24,7 @@
 #include <esp_arduino_version.h>
 #include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
 #include <Fonts/TomThumb.h>  // police 3x5 d'Adafruit GFX : 16 caractères par dalle
-#include <WebServer.h>
+#include <ESPAsyncWebServer.h>  // lib "ESP Async WebServer" (ESP32Async) + "Async TCP" (ESP32Async)
 #include <DNSServer.h>
 #include <LittleFS.h>
 #include <esp_heap_caps.h>
@@ -300,18 +301,35 @@ struct CustomFace {
 CustomFace customFaces[FACE_COUNT];
 bool       isCustom[FACE_COUNT];
 
-WebServer server(80);
+// Le serveur web est asynchrone : il gère plusieurs connexions à la fois (le navigateur
+// d'un téléphone en ouvre plusieurs en parallèle, un serveur synchrone se bloque dessus).
+// Ses callbacks tournent dans la tâche réseau, en parallèle de loop() : ils ne touchent
+// jamais l'affichage, ils déposent une commande dans webQueue que loop() exécute.
+AsyncWebServer server(80);
 DNSServer dns;  // répond 192.168.4.1 à tous les noms : les tests de connexion du téléphone arrivent chez nous
+bool      webStarted = false;
 bool      fsOk = false;
-uint32_t  uploadUntil = 0;
+volatile uint32_t uploadUntil = 0;
+
+enum WebCmdType : uint8_t { WEB_SHOW, WEB_RESET, WEB_FACE };
+struct WebCmd { WebCmdType type; uint8_t id; uint16_t len; };
+QueueHandle_t webQueue;
+uint8_t       webFaceBuf[FACE_MAX_BYTES];  // face reçue, en attente d'être appliquée par loop()
+volatile bool webFaceBusy = false;
 
 String facePath(uint8_t id) { return String("/face") + id + ".bin"; }
 
-bool applyFace(uint8_t id, const uint8_t *buf, size_t len) {
-  if (id >= FACE_COUNT || len < FACE_HEADER) return false;
+// Vérifie le format d'une face (sans rien modifier).
+bool faceDataValid(const uint8_t *buf, size_t len) {
+  if (len < FACE_HEADER) return false;
   const uint8_t n = buf[3];
   if (buf[0] != 'P' || buf[1] != 'F' || buf[2] != 1 || n < 1 || n > MAX_EYE_FRAMES) return false;
-  if (len != FACE_HEADER + (n + 2) * LAYER_BYTES) return false;
+  return len == FACE_HEADER + (n + 2) * LAYER_BYTES;
+}
+
+bool applyFace(uint8_t id, const uint8_t *buf, size_t len) {
+  if (id >= FACE_COUNT || !faceDataValid(buf, len)) return false;
+  const uint8_t n = buf[3];
 
   CustomFace &c = customFaces[id];
   const uint8_t *p = buf + FACE_HEADER;
@@ -362,10 +380,10 @@ void loadCustomFaces() {
   }
 }
 
-size_t hexDecode(const String &s, uint8_t *out, size_t max) {
-  const size_t n = s.length() / 2;
-  if (s.length() % 2 || n > max) return 0;
-  auto nib = [](char c) -> int {
+size_t hexDecode(const uint8_t *s, size_t slen, uint8_t *out, size_t max) {
+  const size_t n = slen / 2;
+  if (slen % 2 || n > max) return 0;
+  auto nib = [](uint8_t c) -> int {
     if (c >= '0' && c <= '9') return c - '0';
     c |= 0x20;
     return (c >= 'a' && c <= 'f') ? c - 'a' + 10 : -1;
@@ -378,82 +396,138 @@ size_t hexDecode(const String &s, uint8_t *out, size_t max) {
   return n;
 }
 
-void touchUpload() {
+void touchUpload(AsyncWebServerRequest *r) {
   uploadUntil = millis() + UPLOAD_TIMEOUT_MS;
-  Serial.printf("HTTP %s %s\n", server.method() == HTTP_POST ? "POST" : "GET", server.uri().c_str());
+  if (r) Serial.printf("HTTP %s %s\n", r->method() == HTTP_POST ? "POST" : "GET", r->url().c_str());
 }
 
 // Lit le paramètre ?id= ; répond 400 et renvoie -1 s'il est absent ou invalide.
-int requestedFace() {
-  const String arg = server.arg("id");
+int requestedFace(AsyncWebServerRequest *r) {
+  touchUpload(r);
+  const String arg = r->hasParam("id") ? r->getParam("id")->value() : String();
   bool digits = arg.length() > 0 && arg.length() <= 3;
   for (size_t i = 0; i < arg.length(); i++) digits &= isDigit(arg[i]);
   const int id = digits ? arg.toInt() : -1;  // "abc".toInt() vaudrait 0 : on refuse plutôt
   if (id < 0 || id >= FACE_COUNT) {
-    server.send(400, "text/plain", "id de face invalide");
+    r->send(400, "text/plain", "id de face invalide");
     return -1;
   }
-  touchUpload();
   return id;
+}
+
+// (types simples, sans valeur par défaut : l'IDE Arduino génère les prototypes en haut du fichier)
+bool queueWebCmd(uint8_t type, uint8_t id, uint16_t len) {
+  const WebCmd c = {(WebCmdType)type, id, len};
+  return xQueueSend(webQueue, &c, 0) == pdTRUE;
+}
+
+// Corps des POST /face : il arrive par morceaux, on l'accumule dans r->_tempObject
+// (libéré automatiquement par la lib à la fin de la requête).
+void onFaceBody(AsyncWebServerRequest *r, uint8_t *data, size_t len, size_t index, size_t total) {
+  if (total > 2 * FACE_MAX_BYTES) return;  // trop gros : la requête sera refusée
+  if (index == 0) r->_tempObject = calloc(total + 1, 1);
+  if (r->_tempObject && index + len <= total) memcpy((uint8_t *)r->_tempObject + index, data, len);
+}
+
+void onFaceUpload(AsyncWebServerRequest *r) {
+  const int id = requestedFace(r);
+  if (id < 0) return;
+  const size_t hexLen = r->contentLength();
+  if (!r->_tempObject || hexLen > 2 * FACE_MAX_BYTES) {
+    r->send(400, "text/plain", "face invalide");
+    return;
+  }
+  if (webFaceBusy) {  // la face précédente n'a pas encore été appliquée
+    r->send(503, "text/plain", "occupé, réessaie");
+    return;
+  }
+  const size_t len = hexDecode((const uint8_t *)r->_tempObject, hexLen, webFaceBuf, sizeof(webFaceBuf));
+  if (!len || !faceDataValid(webFaceBuf, len)) {
+    r->send(400, "text/plain", "face invalide");
+    return;
+  }
+  webFaceBusy = true;
+  if (!queueWebCmd(WEB_FACE, id, len)) {
+    webFaceBusy = false;
+    r->send(503, "text/plain", "occupé, réessaie");
+    return;
+  }
+  r->send(200, "text/plain", fsOk ? "ok" : "ok, mais pas sauvegardée");
+}
+
+// Exécuté dans loop() : applique ce que les requêtes web ont demandé.
+void processWebCommands() {
+  WebCmd c;
+  while (xQueueReceive(webQueue, &c, 0) == pdTRUE) {
+    switch (c.type) {
+      case WEB_SHOW:
+        selectFace(c.id);
+        break;
+      case WEB_RESET:
+        resetFace(c.id);
+        break;
+      case WEB_FACE: {
+        const bool ok = applyFace(c.id, webFaceBuf, c.len);
+        bool saved = false;
+        if (ok && fsOk) {
+          File f = LittleFS.open(facePath(c.id), "w");
+          saved = f && f.write(webFaceBuf, c.len) == c.len;
+          if (f) f.close();
+        }
+        webFaceBusy = false;
+        if (ok) selectFace(c.id);
+        Serial.printf("face %s reçue (%u octets)%s\n", FACE_NAMES[c.id], (unsigned)c.len,
+                      !ok ? ", INVALIDE" : saved ? ", sauvegardée" : ", NON sauvegardée");
+        break;
+      }
+    }
+  }
 }
 
 void setupWebRoutes() {
   // Tests "ai-je internet ?" d'Android / iOS / Windows : on répond comme si oui, sinon le
-  // téléphone envoie ses requêtes par les données mobiles et la page ne charge jamais.
-  server.on("/generate_204", [] { touchUpload(); server.send(204, "text/plain", ""); });
-  server.on("/gen_204", [] { touchUpload(); server.send(204, "text/plain", ""); });
-  server.on("/hotspot-detect.html", [] {
-    touchUpload();
-    server.send(200, "text/html", "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
+  // téléphone peut envoyer ses requêtes par les données mobiles et la page ne charge jamais.
+  auto noContent = [](AsyncWebServerRequest *r) { touchUpload(r); r->send(204); };
+  server.on("/generate_204", HTTP_GET, noContent);
+  server.on("/gen_204", HTTP_GET, noContent);
+  server.on("/hotspot-detect.html", HTTP_GET, [](AsyncWebServerRequest *r) {
+    touchUpload(r);
+    r->send(200, "text/html", "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
   });
-  server.on("/connecttest.txt", [] { touchUpload(); server.send(200, "text/plain", "Microsoft Connect Test"); });
-  server.onNotFound([] {  // tout le reste : réponse immédiate, aucune requête ne reste pendante
-    touchUpload();
-    server.send(404, "text/plain", "");
+  server.on("/connecttest.txt", HTTP_GET, [](AsyncWebServerRequest *r) {
+    touchUpload(r);
+    r->send(200, "text/plain", "Microsoft Connect Test");
   });
-  server.on("/", HTTP_GET, [] {
-    touchUpload();
-    server.send_P(200, "text/html", WEB_UI);
+  server.onNotFound([](AsyncWebServerRequest *r) {  // tout le reste : réponse immédiate
+    touchUpload(r);
+    r->send(404);
   });
-  server.on("/faces", HTTP_GET, [] {
-    touchUpload();
+
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *r) {
+    touchUpload(r);
+    r->send(200, "text/html", WEB_UI);
+  });
+  server.on("/faces", HTTP_GET, [](AsyncWebServerRequest *r) {
+    touchUpload(r);
     String j = "{\"heap\":" + String(ESP.getFreeHeap()) + ",\"fs\":" + (fsOk ? "true" : "false") + ",\"faces\":[";
     for (uint8_t id = 0; id < FACE_COUNT; id++) {
       if (id) j += ',';
       j += "{\"id\":" + String(id) + ",\"name\":\"" + FACE_NAMES[id] + "\",\"custom\":" + (isCustom[id] ? "true" : "false") + "}";
     }
-    server.send(200, "application/json", j + "]}");
+    r->send(200, "application/json", j + "]}");
   });
-  server.on("/face", HTTP_POST, [] {
-    const int id = requestedFace();
+  server.on("/face", HTTP_POST, onFaceUpload, nullptr, onFaceBody);
+  server.on("/show", HTTP_POST, [](AsyncWebServerRequest *r) {
+    const int id = requestedFace(r);
     if (id < 0) return;
-    static uint8_t buf[FACE_MAX_BYTES];
-    const size_t len = hexDecode(server.arg("plain"), buf, sizeof(buf));
-    if (!len || !applyFace(id, buf, len)) {
-      server.send(400, "text/plain", "face invalide");
-      return;
-    }
-    bool saved = false;
-    if (fsOk) {
-      File f = LittleFS.open(facePath(id), "w");
-      saved = f && f.write(buf, len) == len;
-      if (f) f.close();
-    }
-    selectFace(id);
-    Serial.printf("face %s reçue (%u octets)%s\n", FACE_NAMES[id], (unsigned)len, saved ? ", sauvegardée" : ", NON sauvegardée");
-    server.send(200, "text/plain", saved ? "ok" : "ok, mais pas sauvegardée");
+    queueWebCmd(WEB_SHOW, id, 0);
+    r->send(200, "text/plain", "ok");
   });
-  server.on("/show", HTTP_POST, [] {
-    const int id = requestedFace();
+  server.on("/reset", HTTP_POST, [](AsyncWebServerRequest *r) {
+    const int id = requestedFace(r);
     if (id < 0) return;
-    selectFace(id);
-    server.send(200, "text/plain", "ok");
-  });
-  server.on("/reset", HTTP_POST, [] {
-    const int id = requestedFace();
-    if (id < 0) return;
-    resetFace(id);
-    server.send(200, "text/plain", "ok");
+    queueWebCmd(WEB_RESET, id, 0);
+    r->send(200, "text/plain", "ok");
   });
 }
 
@@ -473,16 +547,18 @@ void startUpload() {
     return;
   }
   dns.start(53, "*", WiFi.softAPIP());
-  server.begin();
+  if (!webStarted) {  // le serveur reste en écoute ensuite : sans point d'accès, personne ne peut le joindre
+    server.begin();
+    webStarted = true;
+  }
   uploadMode = true;
-  touchUpload();
+  touchUpload(nullptr);
   dirty = true;
   Serial.printf("Mode upload : WiFi \"%s\", puis http://%s/\n", ssid, WiFi.softAPIP().toString().c_str());
   printMemory("mode upload");
 }
 
 void stopUpload() {
-  server.stop();
   dns.stop();
   WiFi.softAPdisconnect(true);  // repasse en simple station, l'ESP-NOW reste actif
   esp_wifi_set_channel(PROTO_CHANNEL, WIFI_SECOND_CHAN_NONE);
@@ -602,6 +678,7 @@ void setup() {
   printMemory("démarrage");
   for (uint8_t id = 0; id < FACE_COUNT; id++) faces[id] = FACES[id];
   rxQueue = xQueueCreate(8, sizeof(Packet));
+  webQueue = xQueueCreate(4, sizeof(WebCmd));
 
   setupDisplay();  // en premier : les buffers DMA des dalles veulent de la mémoire pas encore fragmentée
   printMemory("après les dalles");
@@ -619,11 +696,11 @@ void setup() {
 void loop() {
   const uint32_t now = millis();
   processPackets();
+  processWebCommands();
   updateEye(now);
   updatePanic(now);
   if (uploadMode) {
     dns.processNextRequest();
-    server.handleClient();
     if (reached(now, uploadUntil)) stopUpload();
   }
   if (dirty) render();
