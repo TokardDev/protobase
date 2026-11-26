@@ -24,6 +24,7 @@
 #include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
 #include <Fonts/TomThumb.h>  // police 3x5 d'Adafruit GFX : 16 caractères par dalle
 #include <WebServer.h>
+#include <DNSServer.h>
 #include <LittleFS.h>
 #include <esp_heap_caps.h>
 #if __has_include(<esp_mac.h>)
@@ -300,6 +301,7 @@ CustomFace customFaces[FACE_COUNT];
 bool       isCustom[FACE_COUNT];
 
 WebServer server(80);
+DNSServer dns;  // répond 192.168.4.1 à tous les noms : les tests de connexion du téléphone arrivent chez nous
 bool      fsOk = false;
 uint32_t  uploadUntil = 0;
 
@@ -376,7 +378,10 @@ size_t hexDecode(const String &s, uint8_t *out, size_t max) {
   return n;
 }
 
-void touchUpload() { uploadUntil = millis() + UPLOAD_TIMEOUT_MS; }
+void touchUpload() {
+  uploadUntil = millis() + UPLOAD_TIMEOUT_MS;
+  Serial.printf("HTTP %s %s\n", server.method() == HTTP_POST ? "POST" : "GET", server.uri().c_str());
+}
 
 // Lit le paramètre ?id= ; répond 400 et renvoie -1 s'il est absent ou invalide.
 int requestedFace() {
@@ -393,6 +398,19 @@ int requestedFace() {
 }
 
 void setupWebRoutes() {
+  // Tests "ai-je internet ?" d'Android / iOS / Windows : on répond comme si oui, sinon le
+  // téléphone envoie ses requêtes par les données mobiles et la page ne charge jamais.
+  server.on("/generate_204", [] { touchUpload(); server.send(204, "text/plain", ""); });
+  server.on("/gen_204", [] { touchUpload(); server.send(204, "text/plain", ""); });
+  server.on("/hotspot-detect.html", [] {
+    touchUpload();
+    server.send(200, "text/html", "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
+  });
+  server.on("/connecttest.txt", [] { touchUpload(); server.send(200, "text/plain", "Microsoft Connect Test"); });
+  server.onNotFound([] {  // tout le reste : réponse immédiate, aucune requête ne reste pendante
+    touchUpload();
+    server.send(404, "text/plain", "");
+  });
   server.on("/", HTTP_GET, [] {
     touchUpload();
     server.send_P(200, "text/html", WEB_UI);
@@ -454,6 +472,7 @@ void startUpload() {
     Serial.println("Échec du point d'accès WiFi");
     return;
   }
+  dns.start(53, "*", WiFi.softAPIP());
   server.begin();
   uploadMode = true;
   touchUpload();
@@ -464,6 +483,7 @@ void startUpload() {
 
 void stopUpload() {
   server.stop();
+  dns.stop();
   WiFi.softAPdisconnect(true);  // repasse en simple station, l'ESP-NOW reste actif
   esp_wifi_set_channel(PROTO_CHANNEL, WIFI_SECOND_CHAN_NONE);
   uploadMode = false;
@@ -602,6 +622,7 @@ void loop() {
   updateEye(now);
   updatePanic(now);
   if (uploadMode) {
+    dns.processNextRequest();
     server.handleClient();
     if (reached(now, uploadUntil)) stopUpload();
   }
