@@ -51,6 +51,8 @@ Hold glove button 3 to turn on upload mode: a small green dot lights up in the t
 
 On that page, pick the face to replace and select its PNGs (same format as below, one per blink step). The PNGs are converted in the browser with the same algorithm as `tools/png2layers.py`, previewed, and only the result is sent. The new face shows up right away and is saved to flash (LittleFS), so it survives a reboot. "Remettre d'origine" restores the built-in face.
 
+Test images are in `PROTOfaces/test/`: `mire.png` (calibration chart: red = eye zone, green = nose zone, blue = mouth zone, arrows should point to the middle of the visor), `coeur_0..2.png` and `surpris_0..2.png` (3 blink steps each, select all three at once) and `content.png`.
+
 Upload mode turns itself off after 10 minutes without activity, or when you hold button 3 again. The glove keeps working while it's on.
 
 At boot, the serial monitor (115200 baud) prints free memory after each step (`[mémoire] ...`). If memory runs short, set `cfg.double_buff = false;` in `setupDisplay()`. If the sketch gets too big for flash, pick a partition scheme with more app space, as long as it keeps a SPIFFS/LittleFS partition (e.g. "Minimal SPIFFS").
