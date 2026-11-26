@@ -108,12 +108,13 @@ const uint8_t BUTTON_COUNT = sizeof(BUTTONS) / sizeof(BUTTONS[0]);
 
 // Kernel panic : un écran fixe de 5 lignes (police 3x5, 4 px par caractère, 14 max).
 // Pas de défilement. Le texte est collé côté nez : la partie arrière des dalles,
-// en partie cachée par le casque, ne reçoit que du vide.
+// en partie cachée par le casque, ne reçoit que du vide. Le coin arrière-bas est le
+// plus caché : les lignes du bas restent courtes (10 caractères max, curseur compris).
 const char *const PANIC_LINES[] = {
   "Kernel panic!",
-  "Cause: someone",  // ASCII seulement : la police TomThumb n'a pas d'accents
-  "called me a",
-  "toaster again.",
+  "Cause: called",   // ASCII seulement : la police TomThumb n'a pas d'accents
+  "a toaster",
+  "again.",
   "Love that.",      // suivi du curseur clignotant
 };
 const uint8_t PANIC_LINE_COUNT = sizeof(PANIC_LINES) / sizeof(PANIC_LINES[0]);

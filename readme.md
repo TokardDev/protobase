@@ -9,7 +9,7 @@ Firmware for a protogen visor: two 64x32 HUB75 LED panels driven by an ESP32, wi
 | Head: ESP32 WROOM (DevKit V1) | plugged into the shield below |
 | [ESP32 HUB75 Driver by rorosaurus](https://github.com/rorosaurus/esp32-hub75-driver) (v1.1) | ESP32 → HUB75 adapter |
 | 2× P3 64x32 HUB75 panels, 1/16 scan | chained, the second one shows the mirror image |
-| Glove: ESP32 + 4 push buttons | buttons between GPIO 21 / 19 / 25 / 33 and GND |
+| Glove (left hand): ESP32 + 4 push buttons | buttons between GPIO and GND: index 33, middle 25, ring 19, little 21 |
 | 5 V power supply | the panels draw a lot, power them directly, not through the ESP32 |
 
 ### Shield pinout
@@ -36,12 +36,12 @@ Free GPIOs on the shield's breakout header: 13, 14, 23, 32, 33 (input/output) an
 
 Each glove button is mapped in the `BUTTONS` (short press) and `LONG_PRESS` (held 0.8 s) tables at the top of `ProtoHead.ino`. A short press is sent when the button is released, so a long press never triggers the short-press action:
 
-| Button | Press | Hold |
+| Button (left hand) | Press | Hold |
 |---|---|---|
-| 0 | neutral face (purple) | brighter, step by step while held, stops at max |
-| 1 | happy face (cyan) | dimmer, step by step while held, stops at min |
-| 2 | crash, then kernel panic | – |
-| 3 | `>w<` face (pink) | upload mode on / off |
+| 0, index | neutral face (purple) | brighter, step by step while held, stops at max |
+| 1, middle | happy face (cyan) | dimmer, step by step while held, stops at min |
+| 2, ring | crash, then kernel panic | – |
+| 3, little | `>w<` face (pink) | upload mode on / off |
 
 Brightness never wraps around (you can't see the visor while wearing it): holding a button for ~3 s always lands on max or min. The level is saved and restored at boot.
 

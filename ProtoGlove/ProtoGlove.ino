@@ -13,7 +13,8 @@
 
 #include "protocol.h"
 
-const uint8_t BUTTON_PINS[] = {21, 19, 25, 33};  // bouton 0, 1, 2, 3
+// Gant main gauche : bouton 0 (le plus utilisé) sur l'index, 3 sur l'auriculaire.
+const uint8_t BUTTON_PINS[] = {33, 25, 19, 21};  // index, majeur, annulaire, auriculaire
 const uint8_t BUTTON_COUNT  = sizeof(BUTTON_PINS);
 
 const uint16_t DEBOUNCE_MS   = 25;
