@@ -93,7 +93,33 @@ def region(kind):
     return r
 
 
-def make_layer(mask, colors, kind):
+# Dégradé de chaque face intégrée : une teinte de base (degrés) par expression. Chaque calque va
+# d'une nuance saturée et un peu plus sombre (côté oreille) à une nuance plus claire (côté nez),
+# avec un léger glissement de teinte. Les faces envoyées depuis le téléphone gardent leurs couleurs.
+HUES = {
+    "neutral": 272, "angry": 14, "blush": 322, "sad": 188,
+    "love": 345, "bored": 232, "puppy": 288, "overheat": 24,
+    "joy": 158, "cry": 212, "uwu": 302, "ko": 2,
+}
+GRADIENT = {"spread": 22, "outer": (1.0, 0.88), "inner": (0.64, 1.0)}   # (saturation, luminosité)
+
+
+def hsv(h, s, v):
+    import colorsys
+    r, g, b = colorsys.hsv_to_rgb((h % 360) / 360, s, v)
+    return tuple(int(round(c * 255)) for c in (r, g, b))
+
+
+def face_gradient(face, kind):
+    h = HUES[face]
+    if kind == "nose":
+        c = hsv(h, 0.7, 1.0)
+        return c, c
+    so, vo = GRADIENT["outer"]; si, vi = GRADIENT["inner"]
+    return hsv(h - GRADIENT["spread"] / 2, so, vo), hsv(h + GRADIENT["spread"] / 2, si, vi)
+
+
+def make_layer(mask, colors, kind, face=None):
     m = mask & region(kind)
     cols = np.nonzero(m.any(0))[0]
     if len(cols) == 0:
@@ -107,6 +133,8 @@ def make_layer(mask, colors, kind):
         sel[:, hi:] = False
         c = colors[sel].mean(0)
         return tuple(int(np.floor(v + 0.5)) for v in c)  # comme Math.round en JS
+    if face in HUES:
+        return m, (x0, x1), face_gradient(face, kind)
     return m, (x0, x1), (avg(x0, x0 + span), avg(x1 - span + 1, x1 + 1))
 
 
@@ -148,12 +176,12 @@ def main():
         for i, f in enumerate(frames):
             mask, colors = load(SRC / f)
             name = f"{face}_eye{i}"
-            layer = make_layer(mask, colors, "eye")
+            layer = make_layer(mask, colors, "eye", face)
             out.append(c_layer(name, layer))
             eyes.append((name, layer))
             if i == 0:
-                mouth = make_layer(mask, colors, "mouth")
-                nose = make_layer(mask, colors, "nose")
+                mouth = make_layer(mask, colors, "mouth", face)
+                nose = make_layer(mask, colors, "nose", face)
                 out.append(c_layer(f"{face}_mouth", mouth))
                 out.append(c_layer(f"{face}_nose", nose))
         face_defs.append(
