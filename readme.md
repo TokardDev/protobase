@@ -1,22 +1,101 @@
 # ProtoBase
-(this code may need cleanup)
 
-## Intro :
-This code is designed to work with an Arduino board, specifically an ESP-32 WROOM. It utilizes a custom hub to connect directly to LED panels for control.
+Firmware for a protogen visor: two 64x32 HUB75 LED panels driven by an ESP32, with faces switched from a 4-button glove over ESP-NOW.
 
-This code uses ESP32-HUB75-MatrixPanel-I2S-DMA.h and Adafruit DMA libraries for LED matrix control and smooth animation.
+## Hardware
 
-## Hardware used :
+| Part | Notes |
+|---|---|
+| Head: ESP32 WROOM (DevKit V1) | plugged into the shield below |
+| [ESP32 HUB75 Driver by rorosaurus](https://github.com/rorosaurus/esp32-hub75-driver) (v1.1) | ESP32 → HUB75 adapter |
+| 2× P3 64x32 HUB75 panels, 1/16 scan | chained, the second one shows the mirror image |
+| Glove (left hand): ESP32 + 4 push buttons | buttons between GPIO and GND: index 25, middle 33, ring 19, little 21 |
+| 5 V power supply | the panels draw a lot, power them directly, not through the ESP32 |
 
-2 ESP32 (wroom in my case)
+### Shield pinout
 
-2 64x32 led matrices
+The rorosaurus shield uses SmartMatrix's `ESP32_FORUM_PINOUT`, **not** the default pins of the DMA library. The pins are set in `ProtoHead/ProtoHead.ino`, so the library doesn't need to be modified.
 
-possibly an sd card reader
+| R1 | G1 | B1 | R2 | G2 | B2 | A | B | C | D | E | LAT | OE | CLK |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2 | 15 | 4 | 16 | 27 | 17 | 5 | 18 | 19 | 21 | (12, unused) | 26 | 25 | 22 |
 
-4 buttons
+Free GPIOs on the shield's breakout header: 13, 14, 23, 32, 33 (input/output) and 34, 35, 36, 39 (input only, **no internal pull-up**).
 
-## Other
+## Software
+
+1. Arduino IDE with the **esp32 by Espressif** board package (2.x or 3.x both work).
+2. Libraries (Library Manager):
+   - *ESP32 HUB75 LED MATRIX PANEL DMA Display* (mrcodetastic)
+   - *Adafruit GFX Library*
+   - *ESP Async WebServer* and *Async TCP*, both by ESP32Async (upload page)
+3. Copy `ProtoHead/secrets.example.h` to `ProtoHead/secrets.h` and set the upload WiFi password.
+4. Flash `ProtoHead/` on the head ESP32 and `ProtoGlove/` on the glove ESP32.
+
+## Buttons
+
+Each glove button is mapped in the `BUTTONS` (short press) and `LONG_PRESS` (held 0.8 s) tables at the top of `ProtoHead.ino`. A short press is sent when the button is released, so a long press never triggers the short-press action:
+
+| Button (left hand) | Press | Double press | Hold |
+|---|---|---|---|
+| 0, index | neutral face (purple) | joy `^ ^` | brighter, step by step while held, stops at max |
+| 1, middle | sad face (cyan) | crying `T_T` | dimmer, step by step while held, stops at min |
+| 2, ring | `>w<` blush face (pink) | UwU | heart eyes |
+| 3, little | crash, then kernel panic | K.O. `X_X` | upload mode on / off |
+
+A single press is sent 0.25 s after release, so the glove can tell it apart from a double press.
+
+Two neighbouring fingers pressed together (the second within 0.3 s), then released, trigger a combo. Each combo mixes the mood of its two fingers:
+
+| Combo | Face |
+|---|---|
+| index + middle | bored `-_-` |
+| middle + ring | puppy eyes |
+| ring + little | overheating `@_@` (glitches now and then) |
+
+Brightness never wraps around (you can't see the visor while wearing it): holding a button for ~3 s always lands on max or min. The level is saved and restored at boot.
+
+The angry face (orange) is still built into the firmware: put `FACE_ANGRY` in the table to use it.
+
+The kernel panic is preceded by a ~2.3 s crash animation: the face gets more and more corrupted (shifted bands, split colours, noise, flashes of other faces and of MissingNo), then collapses like an old CRT turning off.
+
+The eyes blink on their own at random intervals, and face changes happen while the eye is closed.
+
+## Uploading faces from a phone
+
+Hold glove button 3 to turn on upload mode: a small green dot lights up at the top, next to the nose, and the head creates a WiFi network `Proto-XXXX` that accepts a single device at a time. Its password lives in `ProtoHead/secrets.h`, which git ignores: copy `ProtoHead/secrets.example.h` to `ProtoHead/secrets.h` and set your own password before compiling (the build stops with an error until you do). Connect your phone to it and open http://192.168.4.1/. On Android, accept "stay connected" when the phone warns that the network has no internet access (or turn mobile data off for a moment), otherwise it sends the requests over mobile data and the page can't reach the head.
+
+On that page, pick the face to replace and select its PNGs (same format as below, one per blink step). The PNGs are converted in the browser with the same algorithm as `tools/png2layers.py`, previewed, and only the result is sent. The new face shows up right away and is saved to flash (LittleFS), so it survives a reboot. "Remettre d'origine" restores the built-in face.
+
+Test images are in `PROTOfaces/test/`: `mire.png` (calibration chart: red = eye zone, green = nose zone, blue = mouth zone, arrows should point to the middle of the visor), `coeur_0..2.png` and `surpris_0..2.png` (3 blink steps each, select all three at once) and `content.png`.
+
+Upload mode turns itself off after 10 minutes without activity, or when you hold button 3 again. The glove keeps working while it's on.
+
+At boot, the serial monitor (115200 baud) prints free memory after each step (`[mémoire] ...`). If memory runs short, set `cfg.double_buff = false;` in `setupDisplay()`. If the sketch gets too big for flash, pick a partition scheme with more app space, as long as it keeps a SPIFFS/LittleFS partition (e.g. "Minimal SPIFFS").
+
+## Faces
+
+Faces are drawn as 2000x1000 PNGs in `PROTOfaces/` (one panel; the firmware mirrors it on the second one). `tools/png2layers.py` turns them into 1-bit layers (eye / nose / mouth) plus a color gradient per layer, and writes `ProtoHead/faces.h`:
+
+```sh
+pip install pillow numpy
+python3 tools/png2layers.py --preview preview.png
+```
+
+Each face has one PNG per blink step (open → closed). The mouth and the nose are taken from the first one. Full-screen images that shouldn't be split go in `SCREENS` instead. To add a face: draw the PNGs, add them to `FACES` in the script, run it again, then map the face to a button in `BUTTONS`.
+
+Built-in faces get their colours from `HUES` in the script: one base hue per expression, each layer going from a saturated tone on the ear side to a lighter one next to the nose (strength set by `GRADIENT`). Uploaded faces keep the colours of their PNG.
+
+Thin lines get lost at 64x32: draw strokes at least ~40 px thick on the 2000x1000 canvas.
+
+## Troubleshooting
+
+- **Picture shifted by one pixel or glitchy**: uncomment `cfg.clkphase = false;` in `setupDisplay()`.
+- **Nothing shows up at all**: some panels use an FM6126A driver chip; set `cfg.driver = HUB75_I2S_CFG::FM6126A;`.
+- **The head won't boot when the panels are plugged in**: GPIO 12 is a strapping pin, and the shield wires it to the panel's E line.
+- **Another protogen using this code nearby**: change `PROTO_ID` in both `protocol.h` files.
+
+## Credits
 
 I would like to give a big thank you to PanickingLynx for his help with the hardware aspect of this project! They did a similar project that inspired me a lot, don't hesitate to check ! 
 
