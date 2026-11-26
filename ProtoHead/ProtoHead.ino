@@ -156,6 +156,9 @@ void render() {
 /* ---------------------------------------------------------------------------
    Animations
    --------------------------------------------------------------------------- */
+// Comparaison qui reste juste quand millis() repasse à 0 (au bout de ~49 jours).
+static inline bool reached(uint32_t now, uint32_t t) { return (int32_t)(now - t) >= 0; }
+
 void scheduleBlink(uint32_t now) {
   nextBlink = now + BLINK_MIN_MS + esp_random() % (BLINK_MAX_MS - BLINK_MIN_MS);
 }
@@ -165,11 +168,11 @@ void updateEye(uint32_t now) {
   const uint8_t closed = FACES[face].eyeFrames - 1;
 
   if (eyePhase == EYE_IDLE) {
-    if (pendingFace == face && now < nextBlink) return;
+    if (pendingFace == face && !reached(now, nextBlink)) return;
     eyePhase = EYE_CLOSING;   // clignement normal, ou changement de face
     nextEyeStep = now;
   }
-  if (now < nextEyeStep) return;
+  if (!reached(now, nextEyeStep)) return;
   nextEyeStep = now + BLINK_FRAME_MS;
 
   if (eyePhase == EYE_CLOSING) {
@@ -194,7 +197,7 @@ void updateEye(uint32_t now) {
 }
 
 void updateBsod(uint32_t now) {
-  if (!bsod || now < nextBsodStep) return;
+  if (!bsod || !reached(now, nextBsodStep)) return;
   if (bsodPercent >= 100) {
     bsodPercent = 0;
   } else {
@@ -299,6 +302,7 @@ void setupEspNow() {
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
   esp_wifi_set_channel(PROTO_CHANNEL, WIFI_SECOND_CHAN_NONE);
+  esp_wifi_set_ps(WIFI_PS_NONE);  // radio toujours à l'écoute, sinon des appuis peuvent se perdre
 
   if (esp_now_init() != ESP_OK) {
     Serial.println("Échec init ESP-NOW, redémarrage");
