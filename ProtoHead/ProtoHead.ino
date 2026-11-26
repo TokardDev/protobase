@@ -98,28 +98,17 @@ const ButtonAction LONG_PRESS[] = {
 };
 const uint8_t BUTTON_COUNT = sizeof(BUTTONS) / sizeof(BUTTONS[0]);
 
-// Kernel panic : 16 caractères max par ligne, 5 lignes visibles par dalle.
+// Kernel panic : un écran fixe de 5 lignes (police 3x5, 4 px par caractère, 14 max).
+// Pas de défilement. Le texte est collé côté nez : la partie arrière des dalles,
+// en partie cachée par le casque, ne reçoit que du vide.
 const char *const PANIC_LINES[] = {
-  "Kernel panic -",
-  "not syncing:",
-  "Attempted to",
-  "kill init!",
-  "exitcode=0x0b",
-  "CPU: 0 PID: 1",
-  "Comm: protod",
-  "Call Trace:",
-  " dump_stack+0x6d",
-  " panic+0x101/0x2",
-  " do_exit+0xb43/0",
-  " face_init+0x1f",
-  "Cause: someone",     // ASCII seulement : la police TomThumb n'a pas d'accents
+  "Kernel panic!",
+  "Cause: someone",  // ASCII seulement : la police TomThumb n'a pas d'accents
   "called me a",
   "toaster again.",
-  "Love that.",
-  "---[ end ]---",      // les 5 dernières lignes restent affichées une fois figé
+  "Love that.",      // suivi du curseur clignotant
 };
 const uint8_t PANIC_LINE_COUNT = sizeof(PANIC_LINES) / sizeof(PANIC_LINES[0]);
-const uint8_t PANIC_VISIBLE    = 5;
 
 /* ---------------------------------------------------------------------------
    État
@@ -175,24 +164,22 @@ void drawFace() {
   drawLayer(f.nose);
 }
 
-// Les lignes défilent comme sur une console. Même texte sur chaque dalle,
-// sans miroir, pour qu'il reste lisible des deux côtés.
+// Même texte sur chaque dalle, sans miroir pour rester lisible. Sur la dalle 0 le
+// côté nez est à droite (texte aligné à droite), sur la dalle 1 il est à gauche.
 void drawPanic() {
+  const uint16_t grey = display->color565(200, 200, 200);
   display->setFont(&TomThumb);
   display->setTextWrap(false);
-  display->setTextColor(display->color565(200, 200, 200));
-  const uint8_t first = panicPrinted > PANIC_VISIBLE ? panicPrinted - PANIC_VISIBLE : 0;
+  display->setTextColor(grey);
   for (int p = 0; p < PANEL_CHAIN; p++) {
-    const int ox = p * PANEL_W + 1;
-    for (uint8_t i = first; i < panicPrinted; i++) {
-      display->setCursor(ox, 5 + 6 * (i - first));  // y = ligne de base du texte
+    for (uint8_t i = 0; i < panicPrinted; i++) {
+      const bool last = i == PANIC_LINE_COUNT - 1;
+      const int  w    = 4 * (strlen(PANIC_LINES[i]) + (last ? 1 : 0));  // +1 case pour le curseur
+      const int  x    = p == 0 ? PANEL_W - w : PANEL_W + 1;
+      display->setCursor(x, 5 + 6 * i);  // y = ligne de base du texte
       display->print(PANIC_LINES[i]);
-    }
-    if (panicCursor) {
-      const int line = panicPrinted - first - 1;
-      const int x = ox + 4 * strlen(PANIC_LINES[panicPrinted - 1]) + 1;
-      if (x + 3 <= (p + 1) * PANEL_W)  // pas de curseur qui déborde sur l'autre dalle
-        display->fillRect(x, 6 * line, 3, 5, display->color565(200, 200, 200));
+      if (last && panicCursor)
+        display->fillRect(x + 4 * strlen(PANIC_LINES[i]), 6 * i, 3, 5, grey);
     }
   }
 }
@@ -259,7 +246,7 @@ void updatePanic(uint32_t now) {
   if (!kpanic || !reached(now, nextPanicStep)) return;
   if (panicPrinted < PANIC_LINE_COUNT) {
     panicPrinted++;
-    nextPanicStep = now + 90 + esp_random() % 220;  // vitesse d'impression irrégulière
+    nextPanicStep = now + 250 + esp_random() % 250;  // les lignes apparaissent une à une
   } else {
     panicCursor = !panicCursor;                    // le système est figé, seul le curseur clignote
     nextPanicStep = now + 500;
