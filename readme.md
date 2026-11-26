@@ -40,8 +40,8 @@ Each glove button is mapped in the `BUTTONS` (short press) and `LONG_PRESS` (hel
 |---|---|---|
 | 0, index | neutral face (purple) | brighter, step by step while held, stops at max |
 | 1, middle | happy face (cyan) | dimmer, step by step while held, stops at min |
-| 2, ring | crash, then kernel panic | – |
-| 3, little | `>w<` face (pink) | upload mode on / off |
+| 2, ring | `>w<` blush face (pink) | – |
+| 3, little | crash, then kernel panic | upload mode on / off |
 
 Brightness never wraps around (you can't see the visor while wearing it): holding a button for ~3 s always lands on max or min. The level is saved and restored at boot.
 

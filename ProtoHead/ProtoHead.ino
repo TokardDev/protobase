@@ -95,8 +95,8 @@ struct ButtonAction { ActionType type; uint8_t face; };
 const ButtonAction BUTTONS[] = {
   { ACT_FACE, FACE_NEUTRAL },
   { ACT_FACE, FACE_HAPPY },  // FACE_ANGRY existe aussi si tu veux la remettre
-  { ACT_PANIC, 0 },
-  { ACT_FACE, FACE_UWU },
+  { ACT_FACE, FACE_UWU },    // >w< (blush)
+  { ACT_PANIC, 0 },          // crash + kernel panic, sur l'auriculaire
 };
 const ButtonAction LONG_PRESS[] = {
   { ACT_BRIGHTER, 0 },    // maintenir le bouton 0 : plus lumineux (jusqu'au max)
