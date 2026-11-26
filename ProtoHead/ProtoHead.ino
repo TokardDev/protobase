@@ -498,6 +498,15 @@ void setupWebRoutes() {
     touchUpload(r);
     r->send(200, "text/plain", "Microsoft Connect Test");
   });
+  // Firefox (detectportal.firefox.com)
+  server.on("/success.txt", HTTP_GET, [](AsyncWebServerRequest *r) {
+    touchUpload(r);
+    r->send(200, "text/plain", "success\n");
+  });
+  server.on("/canonical.html", HTTP_GET, [](AsyncWebServerRequest *r) {
+    touchUpload(r);
+    r->send(200, "text/html", "<meta http-equiv=\"refresh\" content=\"0;url=https://support.mozilla.org/kb/captive-portal\"/>");
+  });
   server.onNotFound([](AsyncWebServerRequest *r) {  // tout le reste : réponse immédiate
     touchUpload(r);
     r->send(404);
