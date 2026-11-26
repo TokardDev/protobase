@@ -101,7 +101,7 @@ HUES = {
     "love": 345, "bored": 232, "puppy": 288, "overheat": 24,
     "joy": 158, "cry": 212, "uwu": 302, "ko": 2,
 }
-GRADIENT = {"spread": 22, "outer": (1.0, 0.88), "inner": (0.64, 1.0)}   # (saturation, luminosité)
+GRADIENT = {"spread": 28, "outer": (1.0, 0.84), "inner": (0.56, 1.0)}   # (saturation, luminosité)
 
 
 def hsv(h, s, v):
