@@ -36,12 +36,14 @@ Free GPIOs on the shield's breakout header: 13, 14, 23, 32, 33 (input/output) an
 
 Each glove button is mapped in the `BUTTONS` (short press) and `LONG_PRESS` (held 0.8 s) tables at the top of `ProtoHead.ino`. A short press is sent when the button is released, so a long press never triggers the short-press action:
 
-| Button (left hand) | Press | Hold |
-|---|---|---|
-| 0, index | neutral face (purple) | brighter, step by step while held, stops at max |
-| 1, middle | happy face (cyan) | dimmer, step by step while held, stops at min |
-| 2, ring | `>w<` blush face (pink) | heart eyes |
-| 3, little | crash, then kernel panic | upload mode on / off |
+| Button (left hand) | Press | Double press | Hold |
+|---|---|---|---|
+| 0, index | neutral face (purple) | joy `^ ^` | brighter, step by step while held, stops at max |
+| 1, middle | sad face (cyan) | crying `T_T` | dimmer, step by step while held, stops at min |
+| 2, ring | `>w<` blush face (pink) | UwU | heart eyes |
+| 3, little | crash, then kernel panic | K.O. `X_X` | upload mode on / off |
+
+A single press is sent 0.25 s after release, so the glove can tell it apart from a double press.
 
 Two neighbouring fingers pressed together (the second within 0.3 s), then released, trigger a combo. Each combo mixes the mood of its two fingers:
 

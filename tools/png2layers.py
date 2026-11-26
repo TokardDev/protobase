@@ -41,13 +41,18 @@ COVERAGE = 0.12        # part min d'une cellule 64x32 allumée pour allumer la L
 FACES = {
     "neutral": ["clin0.png", "clin1.png", "clin2.png"],
     "angry":   ["Fache.png", "Fache1.png", "Fache2.png"],
-    "uwu":     ["uwu0.png"],    # >w< (blush) : yeux déjà fermés, une seule image donc pas de clignement
+    "blush":   ["blush0.png"],  # >w< : yeux déjà fermés, une seule image donc pas de clignement
     "sad":     ["sad0.png", "sad1.png", "sad2.png"],  # cyan : oeil neutre retourné à la verticale, bouche ondulée
     # faces des gestes supplémentaires (appui long annulaire, combos de deux doigts)
     "love":     ["love0.png", "love1.png", "love2.png"],              # yeux en coeur
     "bored":    ["bored0.png", "bored1.png", "bored2.png"],           # -_- blasé
     "puppy":    ["puppy0.png", "puppy1.png", "puppy2.png"],           # yeux de chiot
     "overheat": ["overheat0.png"],                                    # @_@ surchauffe (spirales : pas de clignement)
+    # double appui (yeux fermés ou dessinés : pas de clignement)
+    "joy":      ["joy0.png"],                                         # ^ ^ content
+    "cry":      ["cry0.png"],                                         # T_T pleure
+    "uwu":      ["uwu0.png"],                                         # UwU
+    "ko":       ["ko0.png"],                                          # X_X K.O.
 }
 
 # Écrans pleins : l'image entière devient un seul calque <nom>_screen, sans découpage.

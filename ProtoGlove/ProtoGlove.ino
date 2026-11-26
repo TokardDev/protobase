@@ -21,6 +21,8 @@ const uint16_t DEBOUNCE_MS   = 25;
 const uint16_t LONG_PRESS_MS = 800;  // maintenu plus longtemps : appui long (et pas d'appui court)
 const uint16_t REPEAT_MS     = 250;  // puis un CMD_REPEAT toutes les 250 ms tant que c'est maintenu
 const uint16_t CHORD_MS      = 300;  // 2e doigt appuyé dans ce délai après le 1er : combo
+const uint16_t DOUBLE_MS     = 250;  // même doigt ré-appuyé dans ce délai après relâchement : double appui
+                                     // (du coup un appui simple n'est envoyé qu'après ce délai)
 const uint8_t  REPEATS       = 3;    // le broadcast n'a pas d'accusé de réception : on envoie 3 fois
 
 const uint8_t BROADCAST[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -42,6 +44,19 @@ uint8_t  sessionMask  = 0;
 uint32_t sessionStart = 0;
 bool     sessionChord = false;
 
+// Appui simple en attente : on attend DOUBLE_MS pour voir si le même doigt revient.
+int8_t   tapButton = -1;     // -1 = rien en attente
+uint32_t tapAt     = 0;      // date du relâchement
+bool     tapSecond = false;  // le doigt est revenu : c'est son 2e appui qui est en cours
+
+void sendCommand(Command cmd, uint8_t index);
+
+void flushTap() {            // l'appui en attente était bien un appui simple
+  if (tapButton >= 0 && !tapSecond) sendCommand(CMD_BUTTON, tapButton);
+  tapButton = -1;
+  tapSecond = false;
+}
+
 uint8_t seq;
 
 void sendCommand(Command cmd, uint8_t index) {
@@ -55,7 +70,8 @@ void sendCommand(Command cmd, uint8_t index) {
   if (err != ESP_OK) Serial.printf("Envoi ESP-NOW refusé : %s\n", esp_err_to_name(err));
   if (cmd == CMD_CHORD) Serial.printf("combo 0x%X envoyé (seq %u)\n", index, seq);
   else Serial.printf("bouton %u%s envoyé (seq %u)\n", index,
-                     cmd == CMD_LONG_PRESS ? " (long)" : cmd == CMD_REPEAT ? " (maintenu)" : "", seq);
+                     cmd == CMD_LONG_PRESS ? " (long)" : cmd == CMD_REPEAT ? " (maintenu)" :
+                     cmd == CMD_DOUBLE ? " (double)" : "", seq);
 }
 
 void setup() {
@@ -105,7 +121,11 @@ void loop() {
       b.changedAt = now;
     } else if (r != b.stable && now - b.changedAt >= DEBOUNCE_MS) {
       b.stable = r;
-      if (!r) {               // appui : on attend de savoir si c'est court, long ou un combo
+      if (!r) {               // appui : on attend de savoir si c'est court, long, double ou un combo
+        if (tapButton >= 0) {
+          if (tapButton == i && !tapSecond && now - tapAt <= DOUBLE_MS) tapSecond = true;  // 2e appui
+          else flushTap();    // un autre doigt : l'appui en attente était simple
+        }
         if (!sessionMask) {
           sessionStart = now;
           sessionChord = false;
@@ -114,13 +134,31 @@ void loop() {
         b.longSent = false;  // avant le test du combo : sinon l'appui long précédent de ce doigt le bloque
         const bool wasAlone = sessionMask != 0 && !sessionChord;
         sessionMask |= 1 << i;
-        if (wasAlone && now - sessionStart <= CHORD_MS && !anyLongSent()) sessionChord = true;
+        if (wasAlone && now - sessionStart <= CHORD_MS && !anyLongSent()) {
+          sessionChord = true;
+          tapButton = -1;     // le combo l'emporte sur un double appui en cours
+          tapSecond = false;
+        }
       } else if (!b.longSent && !(sessionChord && (sessionMask & (1 << i)))) {
-        sendCommand(CMD_BUTTON, i);  // relâché avant LONG_PRESS_MS, hors combo : appui court
+        // relâché avant LONG_PRESS_MS, hors combo : appui court... ou fin d'un double appui
+        if (tapSecond && tapButton == i) {
+          sendCommand(CMD_DOUBLE, i);
+          tapButton = -1;
+          tapSecond = false;
+        } else {
+          if (tapButton >= 0 && tapButton != i) flushTap();  // un autre doigt attendait encore
+          tapButton = i;      // on attend DOUBLE_MS avant de l'envoyer
+          tapAt = now;
+          tapSecond = false;
+        }
       }
     } else if (sessionChord && (sessionMask & (1 << i))) {
       // doigt d'un combo : ni appui long ni répétition
     } else if (!b.stable && !b.longSent && now - b.pressedAt >= LONG_PRESS_MS) {
+      if (tapSecond && tapButton == i) {  // appui puis maintien : c'est l'appui long qui compte
+        tapButton = -1;
+        tapSecond = false;
+      }
       b.longSent = true;
       b.repeatAt = now;
       sendCommand(CMD_LONG_PRESS, i);
@@ -130,6 +168,7 @@ void loop() {
     }
     if (!b.stable) anyDown = true;
   }
+  if (tapButton >= 0 && !tapSecond && now - tapAt > DOUBLE_MS) flushTap();  // pas de 2e appui : simple
   if (sessionMask && !anyDown) {  // tous les doigts relâchés : fin de la session
     if (sessionChord) sendCommand(CMD_CHORD, sessionMask);
     sessionMask = 0;

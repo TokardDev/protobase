@@ -95,7 +95,7 @@ struct ButtonAction { ActionType type; uint8_t face; };
 const ButtonAction BUTTONS[] = {
   { ACT_FACE, FACE_NEUTRAL },
   { ACT_FACE, FACE_SAD },    // FACE_ANGRY existe aussi si tu veux la remettre
-  { ACT_FACE, FACE_UWU },    // >w< (blush)
+  { ACT_FACE, FACE_BLUSH },  // >w<
   { ACT_PANIC, 0 },          // crash + kernel panic, sur l'auriculaire
 };
 const ButtonAction LONG_PRESS[] = {
@@ -103,6 +103,12 @@ const ButtonAction LONG_PRESS[] = {
   { ACT_DIMMER, 0 },      // maintenir le bouton 1 : moins lumineux (jusqu'au min)
   { ACT_FACE, FACE_LOVE },  // maintenir l'annulaire : yeux en coeur (le blush à fond)
   { ACT_UPLOAD, 0 },      // maintenir le bouton 3 : allume / coupe le mode upload
+};
+const ButtonAction DOUBLE_TAP[] = {   // deux appuis rapides sur le même doigt
+  { ACT_FACE, FACE_JOY },   // index : content ^ ^
+  { ACT_FACE, FACE_CRY },   // majeur : pleure T_T
+  { ACT_FACE, FACE_UWU },   // annulaire : UwU
+  { ACT_FACE, FACE_KO },    // auriculaire : K.O. X_X
 };
 const uint8_t BUTTON_COUNT = sizeof(BUTTONS) / sizeof(BUTTONS[0]);
 
@@ -849,14 +855,14 @@ void saveBrightnessIfDue(uint32_t now) {
 
 void runAction(uint8_t type, uint8_t faceId);
 
-// kind : 0 = appui court, 1 = appui long, 2 = bouton toujours maintenu (répétition).
+// kind : 0 = appui court, 1 = appui long, 2 = bouton toujours maintenu (répétition), 3 = double appui.
 // (uint8_t et pas un enum : l'IDE Arduino génère les prototypes en haut du fichier)
 void handleButton(uint8_t button, uint8_t kind) {
   if (button >= BUTTON_COUNT) return;
-  const ButtonAction &a = kind == 0 ? BUTTONS[button] : LONG_PRESS[button];
+  const ButtonAction &a = kind == 0 ? BUTTONS[button] : kind == 3 ? DOUBLE_TAP[button] : LONG_PRESS[button];
   // la répétition ne sert qu'à la luminosité : pas de mode upload allumé/éteint en boucle
   if (kind == 2 && a.type != ACT_BRIGHTER && a.type != ACT_DIMMER) return;
-  if (kind != 2) Serial.printf("bouton %u%s\n", button, kind == 1 ? " (long)" : "");
+  if (kind != 2) Serial.printf("bouton %u%s\n", button, kind == 1 ? " (long)" : kind == 3 ? " (double)" : "");
   runAction(a.type, a.face);
 }
 
@@ -932,6 +938,7 @@ void processPackets() {
     if (p.cmd == CMD_LONG_PRESS) handleButton(p.arg, 1);
     if (p.cmd == CMD_REPEAT)     handleButton(p.arg, 2);
     if (p.cmd == CMD_CHORD)      handleChord(p.arg);
+    if (p.cmd == CMD_DOUBLE)     handleButton(p.arg, 3);
   }
 }
 
