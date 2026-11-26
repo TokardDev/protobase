@@ -89,10 +89,10 @@ const char *const PANIC_LINES[] = {
   " panic+0x101/0x2",
   " do_exit+0xb43/0",
   " face_init+0x1f",
-  "Cause: on m'a",      // pas d'accents : la police TomThumb n'a que l'ASCII
-  "encore pris pour",
-  "un grille-pain.",
-  "Super ambiance.",
+  "Cause: someone",     // ASCII seulement : la police TomThumb n'a pas d'accents
+  "called me a",
+  "toaster again.",
+  "Love that.",
   "---[ end ]---",      // les 5 dernières lignes restent affichées une fois figé
 };
 const uint8_t PANIC_LINE_COUNT = sizeof(PANIC_LINES) / sizeof(PANIC_LINES[0]);
