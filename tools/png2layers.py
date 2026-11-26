@@ -42,7 +42,12 @@ FACES = {
     "neutral": ["clin0.png", "clin1.png", "clin2.png"],
     "angry":   ["Fache.png", "Fache1.png", "Fache2.png"],
     "uwu":     ["uwu0.png"],    # >w< (blush) : yeux déjà fermés, une seule image donc pas de clignement
-    "happy":   ["happy0.png", "happy1.png", "happy2.png"],  # cyan : oeil neutre retourné à la verticale, bouche ondulée
+    "sad":     ["sad0.png", "sad1.png", "sad2.png"],  # cyan : oeil neutre retourné à la verticale, bouche ondulée
+    # faces des gestes supplémentaires (appui long annulaire, combos de deux doigts)
+    "love":     ["love0.png", "love1.png", "love2.png"],              # yeux en coeur
+    "bored":    ["bored0.png", "bored1.png", "bored2.png"],           # -_- blasé
+    "puppy":    ["puppy0.png", "puppy1.png", "puppy2.png"],           # yeux de chiot
+    "overheat": ["overheat0.png"],                                    # @_@ surchauffe (spirales : pas de clignement)
 }
 
 # Écrans pleins : l'image entière devient un seul calque <nom>_screen, sans découpage.

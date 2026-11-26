@@ -94,17 +94,26 @@ struct ButtonAction { ActionType type; uint8_t face; };
 
 const ButtonAction BUTTONS[] = {
   { ACT_FACE, FACE_NEUTRAL },
-  { ACT_FACE, FACE_HAPPY },  // FACE_ANGRY existe aussi si tu veux la remettre
+  { ACT_FACE, FACE_SAD },    // FACE_ANGRY existe aussi si tu veux la remettre
   { ACT_FACE, FACE_UWU },    // >w< (blush)
   { ACT_PANIC, 0 },          // crash + kernel panic, sur l'auriculaire
 };
 const ButtonAction LONG_PRESS[] = {
   { ACT_BRIGHTER, 0 },    // maintenir le bouton 0 : plus lumineux (jusqu'au max)
   { ACT_DIMMER, 0 },      // maintenir le bouton 1 : moins lumineux (jusqu'au min)
-  { ACT_NONE, 0 },
+  { ACT_FACE, FACE_LOVE },  // maintenir l'annulaire : yeux en coeur (le blush à fond)
   { ACT_UPLOAD, 0 },      // maintenir le bouton 3 : allume / coupe le mode upload
 };
 const uint8_t BUTTON_COUNT = sizeof(BUTTONS) / sizeof(BUTTONS[0]);
+
+// Combos : deux doigts voisins appuyés ensemble (masque : bit 0 = index ... bit 3 = auriculaire).
+// Chaque combo mélange l'ambiance des deux doigts, pour s'en souvenir facilement.
+struct ChordAction { uint8_t mask; ButtonAction action; };
+const ChordAction CHORDS[] = {
+  { 0b0011, { ACT_FACE, FACE_BORED } },     // index + majeur : blasé -_- (neutre + sad)
+  { 0b0110, { ACT_FACE, FACE_PUPPY } },     // majeur + annulaire : yeux de chiot (sad + blush)
+  { 0b1100, { ACT_FACE, FACE_OVERHEAT } },  // annulaire + auriculaire : surchauffe @_@ (blush + crash)
+};
 
 // Kernel panic : un écran fixe de 5 lignes (police 3x5, 4 px par caractère, 14 max).
 // Pas de défilement. Le texte est collé côté nez : la partie arrière des dalles,
@@ -247,6 +256,26 @@ void startCrash() {
 
 void stopCrash() { crashPhase = 0; }
 
+// Face surchauffe : de temps en temps, 2 à 4 images de glitch léger.
+uint8_t  faceGlitchFrames = 0;
+uint32_t nextFaceGlitch   = 0;
+
+void updateFaceGlitch(uint32_t now) {
+  if (face != FACE_OVERHEAT || kpanic || crashPhase || eyePhase != EYE_IDLE) {
+    if (faceGlitchFrames) { faceGlitchFrames = 0; dirty = true; }
+    return;
+  }
+  if (!reached(now, nextFaceGlitch)) return;
+  if (faceGlitchFrames == 0) {
+    faceGlitchFrames = 2 + esp_random() % 3;
+    nextFaceGlitch = now;
+  }
+  faceGlitchFrames--;
+  // après la dernière image corrompue : une image propre, puis une pause de 0,6 à 2,4 s
+  nextFaceGlitch = now + (faceGlitchFrames ? 50 : 600 + esp_random() % 1800);
+  dirty = true;
+}
+
 void updateCrash(uint32_t now) {
   if (!crashPhase || !reached(now, nextCrashFrame)) return;
   nextCrashFrame = now + CRASH_FRAME_MS;
@@ -273,13 +302,14 @@ void updateCrash(uint32_t now) {
 // Remplit crashBuf avec la source de l'image : la face actuelle, parfois une autre face,
 // et MissingNo à deux moments fixes (+ quelques flashs au hasard).
 // Renvoie vrai si c'est MissingNo : il doit rester reconnaissable, donc peu d'effets.
-bool fillCrashSource(int p100) {
+// allowSwaps = faux : uniquement la face actuelle (petit glitch de la face surchauffe).
+bool fillCrashSource(int p100, bool allowSwaps) {
   memset(crashBuf, 0, sizeof(crashBuf));
   drawToCrashBuf = true;
-  const bool block = (p100 >= 52 && p100 < 60) || (p100 >= 84 && p100 < 87) || chance(p100 / 12);
+  const bool block = allowSwaps && ((p100 >= 52 && p100 < 60) || (p100 >= 84 && p100 < 87) || chance(p100 / 12));
   if (block) {
     drawMissingno();
-  } else if (chance(8 + p100 / 3)) {
+  } else if (allowSwaps && chance(8 + p100 / 3)) {
     const uint8_t other = rnd() % FACE_COUNT;
     drawFaceFrame(other, rnd() % faces[other].eyeFrames);
   } else {
@@ -289,11 +319,17 @@ bool fillCrashSource(int p100) {
   return block;
 }
 
+void drawGlitchFrame(int p100, bool allowSwaps);
+
 void drawCrashGlitch() {
-  const int p100 = crashT * 100 / CRASH_GLITCH_MS;  // 0 -> 100 : intensité
   rng = crashSeed;
-  const bool clean = fillCrashSource(p100);
-  if (!clean && chance(4 + p100 / 8)) return;  // image perdue : noir complet
+  drawGlitchFrame(crashT * 100 / CRASH_GLITCH_MS, true);  // intensité 0 -> 100
+}
+
+// Une image corrompue. p100 = intensité (0-100), allowSwaps = autres faces / MissingNo permis.
+void drawGlitchFrame(int p100, bool allowSwaps) {
+  const bool clean = fillCrashSource(p100, allowSwaps);
+  if (allowSwaps && !clean && chance(4 + p100 / 8)) return;  // image perdue : noir complet
 
   const bool    invert = !clean && chance(5 + p100 / 6);
   const uint8_t perm   = !clean && chance(8 + p100 / 4) ? 1 + rnd() % 2 : 0;  // canaux de couleur échangés
@@ -401,6 +437,7 @@ void render() {
   display->clearScreen();
   if (crashPhase)  drawCrash();
   else if (kpanic) drawPanic();
+  else if (faceGlitchFrames) { rng = esp_random() | 1; drawGlitchFrame(30, false); }
   else             drawFace();
   if (uploadMode) {  // petit point vert en haut côté nez (l'arrière des dalles est en partie caché)
     for (int y = 0; y < 2; y++)
@@ -810,6 +847,8 @@ void saveBrightnessIfDue(uint32_t now) {
   prefs.putUChar("bright", brightness);
 }
 
+void runAction(uint8_t type, uint8_t faceId);
+
 // kind : 0 = appui court, 1 = appui long, 2 = bouton toujours maintenu (répétition).
 // (uint8_t et pas un enum : l'IDE Arduino génère les prototypes en haut du fichier)
 void handleButton(uint8_t button, uint8_t kind) {
@@ -818,13 +857,27 @@ void handleButton(uint8_t button, uint8_t kind) {
   // la répétition ne sert qu'à la luminosité : pas de mode upload allumé/éteint en boucle
   if (kind == 2 && a.type != ACT_BRIGHTER && a.type != ACT_DIMMER) return;
   if (kind != 2) Serial.printf("bouton %u%s\n", button, kind == 1 ? " (long)" : "");
+  runAction(a.type, a.face);
+}
 
-  switch (a.type) {
+void handleChord(uint8_t mask) {
+  for (const ChordAction &c : CHORDS)
+    if (c.mask == mask) {
+      Serial.printf("combo 0x%X\n", mask);
+      runAction(c.action.type, c.action.face);
+      return;
+    }
+  Serial.printf("combo 0x%X : rien d'associé\n", mask);
+}
+
+// (types simples dans la signature : l'IDE Arduino génère les prototypes en haut du fichier)
+void runAction(uint8_t type, uint8_t faceId) {
+  switch (type) {
     case ACT_NONE:
       break;
 
     case ACT_FACE:
-      selectFace(a.face);
+      selectFace(faceId);
       break;
 
     case ACT_PANIC:
@@ -878,6 +931,7 @@ void processPackets() {
     if (p.cmd == CMD_BUTTON)     handleButton(p.arg, 0);
     if (p.cmd == CMD_LONG_PRESS) handleButton(p.arg, 1);
     if (p.cmd == CMD_REPEAT)     handleButton(p.arg, 2);
+    if (p.cmd == CMD_CHORD)      handleChord(p.arg);
   }
 }
 
@@ -946,6 +1000,7 @@ void loop() {
   checkRadio();
   updateEye(now);
   updateCrash(now);
+  updateFaceGlitch(now);
   updatePanic(now);
   saveBrightnessIfDue(now);
   if (uploadMode) {

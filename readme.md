@@ -9,7 +9,7 @@ Firmware for a protogen visor: two 64x32 HUB75 LED panels driven by an ESP32, wi
 | Head: ESP32 WROOM (DevKit V1) | plugged into the shield below |
 | [ESP32 HUB75 Driver by rorosaurus](https://github.com/rorosaurus/esp32-hub75-driver) (v1.1) | ESP32 → HUB75 adapter |
 | 2× P3 64x32 HUB75 panels, 1/16 scan | chained, the second one shows the mirror image |
-| Glove (left hand): ESP32 + 4 push buttons | buttons between GPIO and GND: index 33, middle 25, ring 19, little 21 |
+| Glove (left hand): ESP32 + 4 push buttons | buttons between GPIO and GND: index 25, middle 33, ring 19, little 21 |
 | 5 V power supply | the panels draw a lot, power them directly, not through the ESP32 |
 
 ### Shield pinout
@@ -40,8 +40,16 @@ Each glove button is mapped in the `BUTTONS` (short press) and `LONG_PRESS` (hel
 |---|---|---|
 | 0, index | neutral face (purple) | brighter, step by step while held, stops at max |
 | 1, middle | happy face (cyan) | dimmer, step by step while held, stops at min |
-| 2, ring | `>w<` blush face (pink) | – |
+| 2, ring | `>w<` blush face (pink) | heart eyes |
 | 3, little | crash, then kernel panic | upload mode on / off |
+
+Two neighbouring fingers pressed together (the second within 0.3 s), then released, trigger a combo. Each combo mixes the mood of its two fingers:
+
+| Combo | Face |
+|---|---|
+| index + middle | bored `-_-` |
+| middle + ring | puppy eyes |
+| ring + little | overheating `@_@` (glitches now and then) |
 
 Brightness never wraps around (you can't see the visor while wearing it): holding a button for ~3 s always lands on max or min. The level is saved and restored at boot.
 
