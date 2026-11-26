@@ -11,6 +11,10 @@
 
   Libs : "ESP32 HUB75 LED MATRIX PANEL DMA Display" (mrcodetastic) + "Adafruit GFX Library".
   Pas besoin de modifier la lib : le brochage du shield est défini ci-dessous.
+
+  Mode upload (appui long sur le bouton 3 du gant) : la tête crée un WiFi "Proto-XXXX",
+  et la page http://192.168.4.1/ permet d'envoyer de nouvelles faces depuis un téléphone.
+  Elles sont gardées en flash (LittleFS) et rechargées au démarrage.
 */
 #include <Arduino.h>
 #include <WiFi.h>
@@ -19,9 +23,13 @@
 #include <esp_arduino_version.h>
 #include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
 #include <Fonts/TomThumb.h>  // police 3x5 d'Adafruit GFX : 16 caractères par dalle
+#include <WebServer.h>
+#include <LittleFS.h>
+#include <esp_heap_caps.h>
 
 #include "protocol.h"
 #include "faces.h"
+#include "webui.h"
 
 /* ---------------------------------------------------------------------------
    Matrice
@@ -57,8 +65,11 @@ const uint16_t BLINK_FRAME_MS   = 45;    // durée de chaque étape du clignemen
 const uint32_t BLINK_MIN_MS     = 2500;  // intervalle aléatoire entre deux clignements
 const uint32_t BLINK_MAX_MS     = 6000;
 
+#define UPLOAD_PASSWORD "protobase"            // mot de passe du WiFi d'upload (8 caractères min) : change-le
+const uint32_t UPLOAD_TIMEOUT_MS = 10 * 60000;  // le mode upload se coupe après 10 min sans activité
+
 // Ce que fait chaque bouton du gant (0..3), en appui court et en appui long.
-enum ActionType : uint8_t { ACT_NONE, ACT_FACE, ACT_PANIC, ACT_BRIGHTNESS };
+enum ActionType : uint8_t { ACT_NONE, ACT_FACE, ACT_PANIC, ACT_BRIGHTNESS, ACT_UPLOAD };
 struct ButtonAction { ActionType type; uint8_t face; };
 
 const ButtonAction BUTTONS[] = {
@@ -71,7 +82,7 @@ const ButtonAction LONG_PRESS[] = {
   { ACT_BRIGHTNESS, 0 },  // maintenir le bouton 0 : luminosité suivante
   { ACT_NONE, 0 },
   { ACT_NONE, 0 },
-  { ACT_NONE, 0 },
+  { ACT_UPLOAD, 0 },      // maintenir le bouton 3 : allume / coupe le mode upload
 };
 const uint8_t BUTTON_COUNT = sizeof(BUTTONS) / sizeof(BUTTONS[0]);
 
@@ -103,6 +114,7 @@ const uint8_t PANIC_VISIBLE    = 5;
    --------------------------------------------------------------------------- */
 MatrixPanel_I2S_DMA *display = nullptr;
 QueueHandle_t rxQueue;
+FaceDef faces[FACE_COUNT];   // faces affichées : celles de faces.h, ou celles envoyées par le téléphone
 
 enum EyePhase : uint8_t { EYE_IDLE, EYE_CLOSING, EYE_OPENING };
 
@@ -120,6 +132,7 @@ uint32_t nextPanicStep = 0;
 
 uint8_t  brightness = DEFAULT_BRIGHTNESS;
 bool     dirty      = true;   // l'écran doit être redessiné
+bool     uploadMode = false;  // WiFi d'upload actif
 int16_t  lastSeq    = -1;
 
 /* ---------------------------------------------------------------------------
@@ -144,7 +157,7 @@ void drawLayer(const Layer *l) {
 }
 
 void drawFace() {
-  const FaceDef &f = FACES[face];
+  const FaceDef &f = faces[face];
   drawLayer(f.eye[min<uint8_t>(eyeFrame, f.eyeFrames - 1)]);
   drawLayer(f.mouth);
   drawLayer(f.nose);
@@ -176,6 +189,13 @@ void render() {
   display->clearScreen();
   if (kpanic) drawPanic();
   else      drawFace();
+  if (uploadMode) {  // petit point vert dans les coins : le WiFi d'upload est allumé
+    for (int y = 0; y < 2; y++)
+      for (int x = 0; x < 2; x++) {
+        display->drawPixelRGB888(x, y, 0, 200, 60);
+        display->drawPixelRGB888(SCREEN_W - 1 - x, y, 0, 200, 60);
+      }
+  }
   display->flipDMABuffer();
   dirty = false;
 }
@@ -192,7 +212,7 @@ void scheduleBlink(uint32_t now) {
 
 void updateEye(uint32_t now) {
   if (kpanic) return;
-  const uint8_t closed = FACES[face].eyeFrames - 1;
+  const uint8_t closed = faces[face].eyeFrames - 1;
 
   if (eyePhase == EYE_IDLE) {
     if (pendingFace == face && !reached(now, nextBlink)) return;
@@ -208,7 +228,7 @@ void updateEye(uint32_t now) {
     } else {
       // oeil fermé : c'est là qu'on change de face, ça masque la transition
       face = pendingFace;
-      eyeFrame = FACES[face].eyeFrames - 1;
+      eyeFrame = faces[face].eyeFrames - 1;
       eyePhase = EYE_OPENING;
     }
   } else {  // EYE_OPENING
@@ -235,6 +255,216 @@ void updatePanic(uint32_t now) {
   dirty = true;
 }
 
+// Demande l'affichage d'une face : elle apparaît au prochain oeil fermé.
+void selectFace(uint8_t id) {
+  if (id >= FACE_COUNT) return;
+  pendingFace = id;
+  if (kpanic) {
+    // sortie du kernel panic : on "redémarre" avec l'oeil fermé qui s'ouvre
+    kpanic = false;
+    face = pendingFace;
+    eyeFrame = faces[face].eyeFrames - 1;
+    eyePhase = EYE_OPENING;
+    nextEyeStep = millis() + BLINK_FRAME_MS;
+    dirty = true;
+  } else if (eyePhase == EYE_OPENING && pendingFace != face) {
+    eyePhase = EYE_CLOSING;  // on referme direct pour changer de face
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Mémoire
+   --------------------------------------------------------------------------- */
+void printMemory(const char *when) {
+  Serial.printf("[mémoire] %s : libre %u o, dont DMA %u o, plus gros bloc %u o\n", when,
+                (unsigned)ESP.getFreeHeap(),
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+}
+
+/* ---------------------------------------------------------------------------
+   Faces envoyées depuis le téléphone + mode upload
+   --------------------------------------------------------------------------- */
+// Format d'une face (envoyé en hex par webui.h, stocké tel quel en flash) :
+//   'P', 'F', 1, nbYeux, puis nbYeux+2 calques (yeux..., bouche, nez) de
+//   x0, x1, c0[3], c1[3] + 256 octets de masque.
+const size_t LAYER_BITS     = PANEL_W * PANEL_H / 8;
+const size_t LAYER_BYTES    = 8 + LAYER_BITS;
+const size_t FACE_HEADER    = 4;
+const size_t FACE_MAX_BYTES = FACE_HEADER + (MAX_EYE_FRAMES + 2) * LAYER_BYTES;
+
+struct CustomFace {
+  uint8_t bits[MAX_EYE_FRAMES + 2][LAYER_BITS];
+  Layer   layers[MAX_EYE_FRAMES + 2];
+};
+CustomFace customFaces[FACE_COUNT];
+bool       isCustom[FACE_COUNT];
+
+WebServer server(80);
+bool      fsOk = false;
+uint32_t  uploadUntil = 0;
+
+String facePath(uint8_t id) { return String("/face") + id + ".bin"; }
+
+bool applyFace(uint8_t id, const uint8_t *buf, size_t len) {
+  if (id >= FACE_COUNT || len < FACE_HEADER) return false;
+  const uint8_t n = buf[3];
+  if (buf[0] != 'P' || buf[1] != 'F' || buf[2] != 1 || n < 1 || n > MAX_EYE_FRAMES) return false;
+  if (len != FACE_HEADER + (n + 2) * LAYER_BYTES) return false;
+
+  CustomFace &c = customFaces[id];
+  const uint8_t *p = buf + FACE_HEADER;
+  for (uint8_t i = 0; i < n + 2; i++, p += LAYER_BYTES) {
+    Layer &l = c.layers[i];
+    l.x0 = p[0];
+    l.x1 = p[1];
+    memcpy(l.c0, p + 2, 3);
+    memcpy(l.c1, p + 5, 3);
+    memcpy(c.bits[i], p + 8, LAYER_BITS);
+    l.bits = c.bits[i];
+  }
+  FaceDef &f = faces[id];
+  for (uint8_t i = 0; i < MAX_EYE_FRAMES; i++) f.eye[i] = i < n ? &c.layers[i] : nullptr;
+  f.eyeFrames = n;
+  f.mouth = &c.layers[n];
+  f.nose  = &c.layers[n + 1];
+  isCustom[id] = true;
+
+  if (face == id) {  // la face affichée vient de changer : on repart d'un oeil ouvert
+    eyeFrame = 0;
+    eyePhase = EYE_IDLE;
+    scheduleBlink(millis());
+    dirty = true;
+  }
+  return true;
+}
+
+void resetFace(uint8_t id) {
+  faces[id] = FACES[id];
+  isCustom[id] = false;
+  if (fsOk) LittleFS.remove(facePath(id));
+  if (face == id) {
+    eyeFrame = 0;
+    eyePhase = EYE_IDLE;
+    dirty = true;
+  }
+}
+
+void loadCustomFaces() {
+  static uint8_t buf[FACE_MAX_BYTES];
+  for (uint8_t id = 0; id < FACE_COUNT; id++) {
+    File f = LittleFS.open(facePath(id), "r");
+    if (!f) continue;
+    const size_t len = f.read(buf, sizeof(buf));
+    f.close();
+    Serial.printf("face %s perso : %s\n", FACE_NAMES[id], applyFace(id, buf, len) ? "chargée" : "fichier invalide, ignorée");
+  }
+}
+
+size_t hexDecode(const String &s, uint8_t *out, size_t max) {
+  const size_t n = s.length() / 2;
+  if (s.length() % 2 || n > max) return 0;
+  auto nib = [](char c) -> int {
+    if (c >= '0' && c <= '9') return c - '0';
+    c |= 0x20;
+    return (c >= 'a' && c <= 'f') ? c - 'a' + 10 : -1;
+  };
+  for (size_t i = 0; i < n; i++) {
+    const int h = nib(s[2 * i]), l = nib(s[2 * i + 1]);
+    if (h < 0 || l < 0) return 0;
+    out[i] = (h << 4) | l;
+  }
+  return n;
+}
+
+void touchUpload() { uploadUntil = millis() + UPLOAD_TIMEOUT_MS; }
+
+// Lit le paramètre ?id= ; répond 400 et renvoie -1 s'il est absent ou invalide.
+int requestedFace() {
+  const int id = server.hasArg("id") ? server.arg("id").toInt() : -1;
+  if (id < 0 || id >= FACE_COUNT) {
+    server.send(400, "text/plain", "id de face invalide");
+    return -1;
+  }
+  touchUpload();
+  return id;
+}
+
+void setupWebRoutes() {
+  server.on("/", HTTP_GET, [] {
+    touchUpload();
+    server.send_P(200, "text/html", WEB_UI);
+  });
+  server.on("/faces", HTTP_GET, [] {
+    touchUpload();
+    String j = "{\"heap\":" + String(ESP.getFreeHeap()) + ",\"fs\":" + (fsOk ? "true" : "false") + ",\"faces\":[";
+    for (uint8_t id = 0; id < FACE_COUNT; id++) {
+      if (id) j += ',';
+      j += "{\"id\":" + String(id) + ",\"name\":\"" + FACE_NAMES[id] + "\",\"custom\":" + (isCustom[id] ? "true" : "false") + "}";
+    }
+    server.send(200, "application/json", j + "]}");
+  });
+  server.on("/face", HTTP_POST, [] {
+    const int id = requestedFace();
+    if (id < 0) return;
+    static uint8_t buf[FACE_MAX_BYTES];
+    const size_t len = hexDecode(server.arg("plain"), buf, sizeof(buf));
+    if (!len || !applyFace(id, buf, len)) {
+      server.send(400, "text/plain", "face invalide");
+      return;
+    }
+    bool saved = false;
+    if (fsOk) {
+      File f = LittleFS.open(facePath(id), "w");
+      saved = f && f.write(buf, len) == len;
+      if (f) f.close();
+    }
+    selectFace(id);
+    Serial.printf("face %s reçue (%u octets)%s\n", FACE_NAMES[id], (unsigned)len, saved ? ", sauvegardée" : ", NON sauvegardée");
+    server.send(200, "text/plain", saved ? "ok" : "ok, mais pas sauvegardée");
+  });
+  server.on("/show", HTTP_POST, [] {
+    const int id = requestedFace();
+    if (id < 0) return;
+    selectFace(id);
+    server.send(200, "text/plain", "ok");
+  });
+  server.on("/reset", HTTP_POST, [] {
+    const int id = requestedFace();
+    if (id < 0) return;
+    resetFace(id);
+    server.send(200, "text/plain", "ok");
+  });
+}
+
+void startUpload() {
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+  char ssid[16];
+  snprintf(ssid, sizeof(ssid), "Proto-%02X%02X", mac[4], mac[5]);
+  // même canal que l'ESP-NOW : le gant continue de fonctionner pendant l'upload
+  if (!WiFi.softAP(ssid, UPLOAD_PASSWORD, PROTO_CHANNEL)) {
+    Serial.println("Échec du point d'accès WiFi");
+    return;
+  }
+  server.begin();
+  uploadMode = true;
+  touchUpload();
+  dirty = true;
+  Serial.printf("Mode upload : WiFi \"%s\" (mot de passe \"%s\"), puis http://%s/\n",
+                ssid, UPLOAD_PASSWORD, WiFi.softAPIP().toString().c_str());
+  printMemory("mode upload");
+}
+
+void stopUpload() {
+  server.stop();
+  WiFi.softAPdisconnect(true);  // repasse en simple station, l'ESP-NOW reste actif
+  esp_wifi_set_channel(PROTO_CHANNEL, WIFI_SECOND_CHAN_NONE);
+  uploadMode = false;
+  dirty = true;
+  Serial.println("Mode upload coupé");
+}
+
 /* ---------------------------------------------------------------------------
    Commandes du gant
    --------------------------------------------------------------------------- */
@@ -248,19 +478,7 @@ void handleButton(uint8_t button, bool longPress) {
       break;
 
     case ACT_FACE:
-      if (a.face >= FACE_COUNT) return;
-      pendingFace = a.face;
-      if (kpanic) {
-        // sortie du kernel panic : on "redémarre" avec l'oeil fermé qui s'ouvre
-        kpanic = false;
-        face = pendingFace;
-        eyeFrame = FACES[face].eyeFrames - 1;
-        eyePhase = EYE_OPENING;
-        nextEyeStep = millis() + BLINK_FRAME_MS;
-        dirty = true;
-      } else if (eyePhase == EYE_OPENING && pendingFace != face) {
-        eyePhase = EYE_CLOSING;  // on referme direct pour changer de face
-      }
+      selectFace(a.face);
       break;
 
     case ACT_PANIC:
@@ -275,6 +493,11 @@ void handleButton(uint8_t button, bool longPress) {
       brightness = (brightness + 1) % sizeof(BRIGHTNESS_LEVELS);
       display->setBrightness8(BRIGHTNESS_LEVELS[brightness]);
       Serial.printf("luminosité %u\n", BRIGHTNESS_LEVELS[brightness]);
+      break;
+
+    case ACT_UPLOAD:
+      if (uploadMode) stopUpload();
+      else            startUpload();
       break;
   }
 }
@@ -345,9 +568,20 @@ void setupEspNow() {
 
 void setup() {
   Serial.begin(115200);
+  printMemory("démarrage");
+  for (uint8_t id = 0; id < FACE_COUNT; id++) faces[id] = FACES[id];
   rxQueue = xQueueCreate(8, sizeof(Packet));
-  setupDisplay();
+
+  setupDisplay();  // en premier : les buffers DMA des dalles veulent de la mémoire pas encore fragmentée
+  printMemory("après les dalles");
+
+  fsOk = LittleFS.begin(true);  // formate la partition au tout premier démarrage
+  if (fsOk) loadCustomFaces();
+  else      Serial.println("LittleFS indisponible : les faces envoyées ne survivront pas à un redémarrage");
+
   setupEspNow();
+  setupWebRoutes();
+  printMemory("après le WiFi");
   scheduleBlink(millis());
 }
 
@@ -356,6 +590,10 @@ void loop() {
   processPackets();
   updateEye(now);
   updatePanic(now);
+  if (uploadMode) {
+    server.handleClient();
+    if (reached(now, uploadUntil)) stopUpload();
+  }
   if (dirty) render();
   delay(1);
 }

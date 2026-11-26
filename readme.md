@@ -39,11 +39,21 @@ Each glove button is mapped in the `BUTTONS` (short press) and `LONG_PRESS` (hel
 | 0 | neutral face (purple) | cycle brightness |
 | 1 | happy face (cyan) | – |
 | 2 | kernel panic | – |
-| 3 | `>w<` face (pink) | – |
+| 3 | `>w<` face (pink) | upload mode on / off |
 
 The angry face (orange) is still built into the firmware: put `FACE_ANGRY` in the table to use it.
 
 The eyes blink on their own at random intervals, and face changes happen while the eye is closed.
+
+## Uploading faces from a phone
+
+Hold glove button 3 to turn on upload mode: a small green dot lights up in the top corners, and the head creates a WiFi network `Proto-XXXX` (password `protobase`, change `UPLOAD_PASSWORD` in `ProtoHead.ino`). Connect your phone to it and open http://192.168.4.1/.
+
+On that page, pick the face to replace and select its PNGs (same format as below, one per blink step). The PNGs are converted in the browser with the same algorithm as `tools/png2layers.py`, previewed, and only the result is sent. The new face shows up right away and is saved to flash (LittleFS), so it survives a reboot. "Remettre d'origine" restores the built-in face.
+
+Upload mode turns itself off after 10 minutes without activity, or when you hold button 3 again. The glove keeps working while it's on.
+
+At boot, the serial monitor (115200 baud) prints free memory after each step (`[mémoire] ...`). If memory runs short, set `cfg.double_buff = false;` in `setupDisplay()`. If the sketch gets too big for flash, pick a partition scheme with more app space, as long as it keeps a SPIFFS/LittleFS partition (e.g. "Minimal SPIFFS").
 
 ## Faces
 

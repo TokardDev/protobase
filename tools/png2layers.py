@@ -33,6 +33,8 @@ SPLIT_Y = 16           # lignes < SPLIT_Y : oeil + nez ; >= SPLIT_Y : bouche
 NOSE_X = 56            # dans la moitié haute, colonnes >= NOSE_X : nez
 LUM_MIN = 60           # luminosité min (0-255) pour qu'un pixel source compte
 COVERAGE = 0.12        # part min d'une cellule 64x32 allumée pour allumer la LED
+# ⚠ Ces réglages (et SPLIT_Y / NOSE_X) sont dupliqués dans le convertisseur JavaScript
+#   de la page d'upload (ProtoHead/webui.h) : garde-les identiques.
 
 # nom de la face -> étapes de clignement, de "oeil ouvert" à "oeil fermé".
 # La bouche et le nez sont pris sur la première image.
@@ -53,17 +55,17 @@ def load(path):
     a = np.asarray(Image.open(path).convert("RGBA")).astype(np.float32)
     lit = a[..., :3].max(-1) * a[..., 3] / 255 > LUM_MIN
     rgb = a[..., :3]
-    # masque 64x32 par couverture de cellule
-    cov = np.asarray(Image.fromarray((lit * 255).astype(np.uint8)).resize((W, H), Image.BOX)) / 255
-    mask = cov > COVERAGE
-    # couleur moyenne des pixels allumés de chaque cellule
+    # chaque pixel source tombe dans une cellule 64x32 ; on compte les pixels allumés
+    # par cellule (couverture) et on fait la moyenne de leurs couleurs
+    h, w = lit.shape
     sums = np.zeros((H, W, 3))
     counts = np.zeros((H, W))
     ys, xs = np.nonzero(lit)
-    cy = ys * H // lit.shape[0]
-    cx = xs * W // lit.shape[1]
+    cy = ys * H // h
+    cx = xs * W // w
     np.add.at(sums, (cy, cx), rgb[ys, xs])
     np.add.at(counts, (cy, cx), 1)
+    mask = counts / ((w / W) * (h / H)) > COVERAGE
     colors = sums / np.maximum(counts, 1)[..., None]
     return mask, colors
 
@@ -94,7 +96,7 @@ def make_layer(mask, colors, kind):
         sel[:, :lo] = False
         sel[:, hi:] = False
         c = colors[sel].mean(0)
-        return tuple(int(round(v)) for v in c)
+        return tuple(int(np.floor(v + 0.5)) for v in c)  # comme Math.round en JS
     return m, (x0, x1), (avg(x0, x0 + span), avg(x1 - span + 1, x1 + 1))
 
 
@@ -161,6 +163,9 @@ def main():
     for i, face in enumerate(FACES):
         out.append(f"  FACE_{face.upper()} = {i},")
     out.append(f"  FACE_COUNT = {len(FACES)}")
+    out.append("};\n")
+    out.append("static const char *const FACE_NAMES[FACE_COUNT] = {")
+    out.append("  " + ", ".join(f'"{face}"' for face in FACES))
     out.append("};\n")
     out.append("static const FaceDef FACES[FACE_COUNT] = {")
     out.extend(face_defs)
