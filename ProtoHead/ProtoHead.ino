@@ -36,6 +36,7 @@
 #include "protocol.h"
 #include "faces.h"
 #include "webui.h"
+#include "missingno.h"
 
 #if __has_include("secrets.h")
   #include "secrets.h"
@@ -149,6 +150,23 @@ int16_t  lastSeq    = -1;
    Dessin
    --------------------------------------------------------------------------- */
 // Dessine un calque sur le premier panneau et en miroir sur le second.
+// Comparaison qui reste juste quand millis() repasse à 0 (au bout de ~49 jours).
+static inline bool reached(uint32_t now, uint32_t t) { return (int32_t)(now - t) >= 0; }
+
+// Cible du dessin : l'écran, ou le buffer du crash quand drawToCrashBuf est vrai.
+uint8_t crashBuf[PANEL_H][SCREEN_W][3];  // 12 Ko : image source de l'animation de crash
+bool    drawToCrashBuf = false;
+
+void putPixel(int x, int y, uint8_t r, uint8_t g, uint8_t b) {
+  if (!drawToCrashBuf) {
+    display->drawPixelRGB888(x, y, r, g, b);
+    return;
+  }
+  crashBuf[y][x][0] = r;
+  crashBuf[y][x][1] = g;
+  crashBuf[y][x][2] = b;
+}
+
 void drawLayer(const Layer *l) {
   if (!l) return;
   const int span = max(1, l->x1 - l->x0);
@@ -160,17 +178,202 @@ void drawLayer(const Layer *l) {
       const uint8_t r = l->c0[0] + (l->c1[0] - l->c0[0]) * t / 256;
       const uint8_t g = l->c0[1] + (l->c1[1] - l->c0[1]) * t / 256;
       const uint8_t b = l->c0[2] + (l->c1[2] - l->c0[2]) * t / 256;
-      display->drawPixelRGB888(x, y, r, g, b);
-      display->drawPixelRGB888(SCREEN_W - 1 - x, y, r, g, b);
+      putPixel(x, y, r, g, b);
+      putPixel(SCREEN_W - 1 - x, y, r, g, b);
     }
   }
 }
 
-void drawFace() {
-  const FaceDef &f = faces[face];
-  drawLayer(f.eye[min<uint8_t>(eyeFrame, f.eyeFrames - 1)]);
+void drawFaceFrame(uint8_t id, uint8_t eye) {
+  const FaceDef &f = faces[id];
+  drawLayer(f.eye[min<uint8_t>(eye, f.eyeFrames - 1)]);
   drawLayer(f.mouth);
   drawLayer(f.nose);
+}
+
+void drawFace() { drawFaceFrame(face, eyeFrame); }
+
+/* ---------------------------------------------------------------------------
+   Crash : animation qui précède le kernel panic
+   1. corruption de plus en plus forte de la face (bandes décalées, couleurs dédoublées,
+      parasites, inversions, bouts d'autres faces, MissingNo qui surgit),
+   2. extinction façon tube cathodique (écrasement en ligne, ligne -> point),
+   3. noir, puis le texte du kernel panic.
+   --------------------------------------------------------------------------- */
+const uint16_t CRASH_GLITCH_MS   = 1400;
+const uint16_t CRASH_COLLAPSE_MS = 400;
+const uint16_t CRASH_BLACK_MS    = 500;
+const uint8_t  CRASH_FRAME_MS    = 33;    // ~30 images/s
+
+uint8_t  crashPhase = 0;     // 0 = pas de crash, 1 = corruption, 2 = extinction, 3 = noir
+uint32_t crashStart = 0, nextCrashFrame = 0, crashT = 0;
+uint32_t crashSeed = 1;      // graine de l'image en cours (réutilisée = image qui saccade)
+uint32_t rng = 1;
+
+uint32_t rnd() {             // xorshift : rapide et rejouable avec la même graine
+  rng ^= rng << 13;
+  rng ^= rng >> 17;
+  rng ^= rng << 5;
+  return rng;
+}
+bool chance(int percent) { return (int)(rnd() % 100) < percent; }
+
+// MissingNo, sans miroir sur chaque dalle (pour qu'il soit dans le bon sens des deux
+// côtés), collé côté nez, sur toute la hauteur.
+void drawMissingno() {
+  for (int p = 0; p < PANEL_CHAIN; p++) {
+    const int ox = p == 0 ? PANEL_W - MISSINGNO_W - 6 : PANEL_W + 6;
+    for (int y = 0; y < MISSINGNO_H; y++)
+      for (int x = 0; x < MISSINGNO_W; x++) {
+        switch (MISSINGNO[y][x]) {
+          case 'L': putPixel(ox + x, y, 248, 232, 248); break;
+          case 'P': putPixel(ox + x, y, 128, 112, 152); break;
+          case 'O': putPixel(ox + x, y, 240, 176, 136); break;
+          case 'K': putPixel(ox + x, y, 40, 24, 24);    break;  // pas noir pur : une LED éteinte ne se voit pas
+        }
+      }
+  }
+}
+
+void startCrash() {
+  kpanic = false;
+  crashPhase = 1;
+  crashStart = millis();
+  nextCrashFrame = crashStart;
+  crashSeed = esp_random() | 1;
+  dirty = true;
+}
+
+void stopCrash() { crashPhase = 0; }
+
+void updateCrash(uint32_t now) {
+  if (!crashPhase || !reached(now, nextCrashFrame)) return;
+  nextCrashFrame = now + CRASH_FRAME_MS;
+  crashT = now - crashStart;
+  if (crashT < CRASH_GLITCH_MS) {
+    crashPhase = 1;
+    // dans la 2e moitié, l'image se fige parfois : on rejoue la même graine
+    rng = crashSeed;
+    if (!(crashT > CRASH_GLITCH_MS / 2 && chance(30))) crashSeed = esp_random() | 1;
+  } else if (crashT < CRASH_GLITCH_MS + CRASH_COLLAPSE_MS) {
+    crashPhase = 2;
+  } else if (crashT < CRASH_GLITCH_MS + CRASH_COLLAPSE_MS + CRASH_BLACK_MS) {
+    crashPhase = 3;
+  } else {
+    crashPhase = 0;  // fin : le texte du kernel panic prend le relais
+    kpanic = true;
+    panicPrinted = 0;
+    panicCursor = false;
+    nextPanicStep = now + 200;
+  }
+  dirty = true;
+}
+
+// Remplit crashBuf avec la source de l'image : la face actuelle, parfois une autre face,
+// et MissingNo à deux moments fixes (+ quelques flashs au hasard).
+// Renvoie vrai si c'est MissingNo : il doit rester reconnaissable, donc peu d'effets.
+bool fillCrashSource(int p100) {
+  memset(crashBuf, 0, sizeof(crashBuf));
+  drawToCrashBuf = true;
+  const bool block = (p100 >= 52 && p100 < 60) || (p100 >= 84 && p100 < 87) || chance(p100 / 12);
+  if (block) {
+    drawMissingno();
+  } else if (chance(8 + p100 / 3)) {
+    const uint8_t other = rnd() % FACE_COUNT;
+    drawFaceFrame(other, rnd() % faces[other].eyeFrames);
+  } else {
+    drawFaceFrame(face, eyeFrame);
+  }
+  drawToCrashBuf = false;
+  return block;
+}
+
+void drawCrashGlitch() {
+  const int p100 = crashT * 100 / CRASH_GLITCH_MS;  // 0 -> 100 : intensité
+  rng = crashSeed;
+  const bool clean = fillCrashSource(p100);
+  if (!clean && chance(4 + p100 / 8)) return;  // image perdue : noir complet
+
+  const bool    invert = !clean && chance(5 + p100 / 6);
+  const uint8_t perm   = !clean && chance(8 + p100 / 4) ? 1 + rnd() % 2 : 0;  // canaux de couleur échangés
+  const int     split  = !clean && chance(35 + p100 / 2) ? 1 + p100 / 34 : 0; // rouge et bleu décalés
+  const int     maxShift = clean ? 2 : 1 + p100 * 16 / 100;
+  const int     shiftChance = clean ? 12 : 15 + p100 * 6 / 10;
+  int8_t shift[PANEL_H];
+  for (int y = 0; y < PANEL_H;) {
+    const int h = 1 + rnd() % 5;
+    const int s = chance(shiftChance) ? (int)(rnd() % (2 * maxShift + 1)) - maxShift : 0;
+    for (int i = 0; i < h && y < PANEL_H; i++, y++) shift[y] = s;
+  }
+
+  for (int y = 0; y < PANEL_H; y++) {
+    for (int x = 0; x < SCREEN_W; x++) {
+      const int sx = x - shift[y];
+      const int xr = sx + split, xb = sx - split;
+      const uint8_t r = (xr >= 0 && xr < SCREEN_W) ? crashBuf[y][xr][0] : 0;
+      const uint8_t g = (sx >= 0 && sx < SCREEN_W) ? crashBuf[y][sx][1] : 0;
+      const uint8_t b = (xb >= 0 && xb < SCREEN_W) ? crashBuf[y][xb][2] : 0;
+      if (!(r | g | b)) continue;
+      uint8_t c[3] = {r, g, b};
+      if (perm == 1) { c[0] = g; c[1] = b; c[2] = r; }
+      if (perm == 2) { c[0] = b; c[1] = r; c[2] = g; }
+      if (invert) for (int k = 0; k < 3; k++) c[k] = 255 - c[k];
+      display->drawPixelRGB888(x, y, c[0], c[1], c[2]);
+    }
+  }
+
+  static const uint8_t NOISE[4][3] = {{255, 255, 255}, {0, 255, 220}, {255, 0, 200}, {120, 255, 60}};
+  const int dots = (clean ? p100 / 2 : p100 * p100) / 40;  // parasites : de rien à ~250
+  for (int i = 0; i < dots; i++) {
+    const uint8_t *n = NOISE[rnd() % 4];
+    display->drawPixelRGB888(rnd() % SCREEN_W, rnd() % PANEL_H, n[0], n[1], n[2]);
+  }
+  if (chance(10 + p100 / 3)) {  // ligne morte horizontale
+    const int y = rnd() % PANEL_H, x0 = rnd() % SCREEN_W, len = 8 + rnd() % 60;
+    const uint8_t v = 120 + rnd() % 136;
+    for (int x = x0; x < x0 + len && x < SCREEN_W; x++) display->drawPixelRGB888(x, y, v, v, v);
+  }
+}
+
+// Extinction façon tube cathodique : l'image s'écrase en une ligne qui blanchit,
+// la ligne rétrécit vers le nez, puis un point qui s'éteint.
+void drawCrashCollapse() {
+  const int q = (crashT - CRASH_GLITCH_MS) * 1000 / CRASH_COLLAPSE_MS;  // 0 -> 1000
+  const float cy = (PANEL_H - 1) / 2.0f, cx = (SCREEN_W - 1) / 2.0f;
+  if (q < 450) {
+    const float a = q / 450.0f, scale = 1.0f - a * 0.97f;
+    for (int y = 0; y < PANEL_H; y++) {
+      const int sy = (int)lroundf(cy + (y - cy) / scale);
+      if (sy < 0 || sy >= PANEL_H) continue;
+      for (int x = 0; x < SCREEN_W; x++) {
+        const uint8_t *s = crashBuf[sy][x];
+        if (!(s[0] | s[1] | s[2])) continue;
+        display->drawPixelRGB888(x, y, s[0] + (255 - s[0]) * a, s[1] + (255 - s[1]) * a, s[2] + (255 - s[2]) * a);
+      }
+    }
+    const uint8_t v = 255 * a * a;  // la ligne centrale s'allume pendant l'écrasement
+    for (int x = 0; x < SCREEN_W; x++) {
+      display->drawPixelRGB888(x, 15, v, v, v);
+      display->drawPixelRGB888(x, 16, v, v, v);
+    }
+  } else if (q < 850) {
+    const float b = (q - 450) / 400.0f;
+    const float half = max(1.0f, cx * (1.0f - b));
+    for (int x = (int)(cx - half); x <= (int)(cx + half + 0.5f); x++) {
+      if (x < 0 || x >= SCREEN_W) continue;
+      display->drawPixelRGB888(x, 15, 255, 255, 255);
+      if (b < 0.6f) display->drawPixelRGB888(x, 16, 200, 200, 200);
+    }
+  } else {
+    const uint8_t v = 255 * (1000 - q) / 150;
+    for (int x = 62; x <= 65; x++) display->drawPixelRGB888(x, 15, v, v, v);
+  }
+}
+
+void drawCrash() {
+  if (crashPhase == 1) drawCrashGlitch();
+  else if (crashPhase == 2) drawCrashCollapse();
+  // phase 3 : noir
 }
 
 // Même texte sur chaque dalle, sans miroir pour rester lisible. Sur la dalle 0 le
@@ -195,8 +398,9 @@ void drawPanic() {
 
 void render() {
   display->clearScreen();
-  if (kpanic) drawPanic();
-  else      drawFace();
+  if (crashPhase)  drawCrash();
+  else if (kpanic) drawPanic();
+  else             drawFace();
   if (uploadMode) {  // petit point vert en haut côté nez (l'arrière des dalles est en partie caché)
     for (int y = 0; y < 2; y++)
       for (int x = PANEL_W - 2; x < PANEL_W; x++) {
@@ -211,15 +415,13 @@ void render() {
 /* ---------------------------------------------------------------------------
    Animations
    --------------------------------------------------------------------------- */
-// Comparaison qui reste juste quand millis() repasse à 0 (au bout de ~49 jours).
-static inline bool reached(uint32_t now, uint32_t t) { return (int32_t)(now - t) >= 0; }
 
 void scheduleBlink(uint32_t now) {
   nextBlink = now + BLINK_MIN_MS + esp_random() % (BLINK_MAX_MS - BLINK_MIN_MS);
 }
 
 void updateEye(uint32_t now) {
-  if (kpanic) return;
+  if (kpanic || crashPhase) return;
   const uint8_t closed = faces[face].eyeFrames - 1;
 
   if (eyePhase == EYE_IDLE) {
@@ -267,8 +469,9 @@ void updatePanic(uint32_t now) {
 void selectFace(uint8_t id) {
   if (id >= FACE_COUNT) return;
   pendingFace = id;
-  if (kpanic) {
-    // sortie du kernel panic : on "redémarre" avec l'oeil fermé qui s'ouvre
+  if (kpanic || crashPhase) {
+    // sortie du crash / kernel panic : on "redémarre" avec l'oeil fermé qui s'ouvre
+    stopCrash();
     kpanic = false;
     face = pendingFace;
     eyeFrame = faces[face].eyeFrames - 1;
@@ -624,11 +827,7 @@ void handleButton(uint8_t button, uint8_t kind) {
       break;
 
     case ACT_PANIC:
-      kpanic = true;
-      panicPrinted = 0;
-      panicCursor = false;
-      nextPanicStep = millis() + 150;
-      dirty = true;
+      if (!crashPhase && !kpanic) startCrash();  // déjà en train de crasher : on laisse finir
       break;
 
     case ACT_BRIGHTER:
@@ -745,6 +944,7 @@ void loop() {
   processWebCommands();
   checkRadio();
   updateEye(now);
+  updateCrash(now);
   updatePanic(now);
   saveBrightnessIfDue(now);
   if (uploadMode) {

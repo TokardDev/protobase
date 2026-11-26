@@ -40,12 +40,14 @@ Each glove button is mapped in the `BUTTONS` (short press) and `LONG_PRESS` (hel
 |---|---|---|
 | 0 | neutral face (purple) | brighter, step by step while held, stops at max |
 | 1 | happy face (cyan) | dimmer, step by step while held, stops at min |
-| 2 | kernel panic | – |
+| 2 | crash, then kernel panic | – |
 | 3 | `>w<` face (pink) | upload mode on / off |
 
 Brightness never wraps around (you can't see the visor while wearing it): holding a button for ~3 s always lands on max or min. The level is saved and restored at boot.
 
 The angry face (orange) is still built into the firmware: put `FACE_ANGRY` in the table to use it.
+
+The kernel panic is preceded by a ~2.3 s crash animation: the face gets more and more corrupted (shifted bands, split colours, noise, flashes of other faces and of MissingNo), then collapses like an old CRT turning off.
 
 The eyes blink on their own at random intervals, and face changes happen while the eye is closed.
 
