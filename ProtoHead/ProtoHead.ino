@@ -89,8 +89,11 @@ const char *const PANIC_LINES[] = {
   " panic+0x101/0x2",
   " do_exit+0xb43/0",
   " face_init+0x1f",
-  "---[ end Kernel",
-  "panic ]---",
+  "Cause: on m'a",      // pas d'accents : la police TomThumb n'a que l'ASCII
+  "encore pris pour",
+  "un grille-pain.",
+  "Super ambiance.",
+  "---[ end ]---",      // les 5 dernières lignes restent affichées une fois figé
 };
 const uint8_t PANIC_LINE_COUNT = sizeof(PANIC_LINES) / sizeof(PANIC_LINES[0]);
 const uint8_t PANIC_VISIBLE    = 5;
@@ -163,7 +166,8 @@ void drawPanic() {
     if (panicCursor) {
       const int line = panicPrinted - first - 1;
       const int x = ox + 4 * strlen(PANIC_LINES[panicPrinted - 1]) + 1;
-      display->fillRect(x, 6 * line, 3, 5, display->color565(200, 200, 200));
+      if (x + 3 <= (p + 1) * PANEL_W)  // pas de curseur qui déborde sur l'autre dalle
+        display->fillRect(x, 6 * line, 3, 5, display->color565(200, 200, 200));
     }
   }
 }
