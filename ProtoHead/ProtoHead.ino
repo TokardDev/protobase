@@ -26,6 +26,9 @@
 #include <WebServer.h>
 #include <LittleFS.h>
 #include <esp_heap_caps.h>
+#if __has_include(<esp_mac.h>)
+  #include <esp_mac.h>  // esp_read_mac (ailleurs que dans esp_system.h selon la version)
+#endif
 
 #include "protocol.h"
 #include "faces.h"
@@ -449,9 +452,13 @@ void setupWebRoutes() {
   });
 }
 
+// Adresse MAC WiFi lue dans l'eFuse de la puce : WiFi.macAddress() renvoie des zéros
+// avec la carte ESP32 3.x tant que l'interface station n'est pas complètement lancée.
+void readMac(uint8_t mac[6]) { esp_read_mac(mac, ESP_MAC_WIFI_STA); }
+
 void startUpload() {
   uint8_t mac[6];
-  WiFi.macAddress(mac);
+  readMac(mac);
   char ssid[16];
   snprintf(ssid, sizeof(ssid), "Proto-%02X%02X", mac[4], mac[5]);
   // même canal que l'ESP-NOW : le gant continue de fonctionner pendant l'upload.
@@ -575,8 +582,9 @@ void setupEspNow() {
     ESP.restart();
   }
   esp_now_register_recv_cb(onReceive);
-  Serial.print("Tête prête, MAC ");
-  Serial.println(WiFi.macAddress());
+  uint8_t mac[6];
+  readMac(mac);
+  Serial.printf("Tête prête, MAC %02X:%02X:%02X:%02X:%02X:%02X\n", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
 void setup() {
