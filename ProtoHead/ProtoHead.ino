@@ -562,10 +562,11 @@ bool       isCustom[FACE_COUNT];
 // K.O. : la langue qui pend d'un côté de la bouche, sous un creux de la vague.
 void drawFaceExtras() {
   if (face == FACE_KO && pendingFace == face && !isCustom[FACE_KO]) {
-    static const char *const TONGUE[] = {"######", "######", "######", ".####.", "..##.."};
-    for (int y = 0; y < 5; y++)
+    // accrochée sous le creux de la vague (colonnes 46-51, ligne 25), sans pixel vide entre les deux
+    static const char *const TONGUE[] = {"######", "######", "######", "######", ".####.", "..##.."};
+    for (int y = 0; y < 6; y++)
       for (int x = 0; x < 6; x++)
-        if (TONGUE[y][x] == '#') display->drawPixelRGB888(48 + x, 26 + y, 255, 110, 140);  // dalle 0 seulement
+        if (TONGUE[y][x] == '#') display->drawPixelRGB888(46 + x, 25 + y, 255, 110, 140);  // dalle 0 seulement
   }
 }
 
