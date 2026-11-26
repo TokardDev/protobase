@@ -381,7 +381,10 @@ void touchUpload() { uploadUntil = millis() + UPLOAD_TIMEOUT_MS; }
 
 // Lit le paramètre ?id= ; répond 400 et renvoie -1 s'il est absent ou invalide.
 int requestedFace() {
-  const int id = server.hasArg("id") ? server.arg("id").toInt() : -1;
+  const String arg = server.arg("id");
+  bool digits = arg.length() > 0 && arg.length() <= 3;
+  for (size_t i = 0; i < arg.length(); i++) digits &= isDigit(arg[i]);
+  const int id = digits ? arg.toInt() : -1;  // "abc".toInt() vaudrait 0 : on refuse plutôt
   if (id < 0 || id >= FACE_COUNT) {
     server.send(400, "text/plain", "id de face invalide");
     return -1;

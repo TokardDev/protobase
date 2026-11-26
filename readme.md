@@ -47,7 +47,7 @@ The eyes blink on their own at random intervals, and face changes happen while t
 
 ## Uploading faces from a phone
 
-Hold glove button 3 to turn on upload mode: a small green dot lights up in the top corners, and the head creates a WiFi network `Proto-XXXX` (password `protobase`, change `UPLOAD_PASSWORD` in `ProtoHead.ino`). Connect your phone to it and open http://192.168.4.1/.
+Hold glove button 3 to turn on upload mode: a small green dot lights up in the top corners, and the head creates a WiFi network `Proto-XXXX` (password `protobase`, change `UPLOAD_PASSWORD` in `ProtoHead.ino`). Connect your phone to it and open http://192.168.4.1/. On Android, accept "stay connected" when the phone warns that the network has no internet access (or turn mobile data off for a moment), otherwise it sends the requests over mobile data and the page can't reach the head.
 
 On that page, pick the face to replace and select its PNGs (same format as below, one per blink step). The PNGs are converted in the browser with the same algorithm as `tools/png2layers.py`, previewed, and only the result is sent. The new face shows up right away and is saved to flash (LittleFS), so it survives a reboot. "Remettre d'origine" restores the built-in face.
 
