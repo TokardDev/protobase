@@ -188,9 +188,9 @@ void render() {
   display->clearScreen();
   if (kpanic) drawPanic();
   else      drawFace();
-  if (uploadMode) {  // petit point vert dans les coins : le WiFi d'upload est allumé
+  if (uploadMode) {  // petit point vert en haut côté nez (l'arrière des dalles est en partie caché)
     for (int y = 0; y < 2; y++)
-      for (int x = 0; x < 2; x++) {
+      for (int x = PANEL_W - 2; x < PANEL_W; x++) {
         display->drawPixelRGB888(x, y, 0, 200, 60);
         display->drawPixelRGB888(SCREEN_W - 1 - x, y, 0, 200, 60);
       }
