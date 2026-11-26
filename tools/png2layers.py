@@ -51,7 +51,7 @@ FACES = {
     # double appui (yeux fermés ou dessinés : pas de clignement)
     "joy":      ["joy0.png"],                                         # ^ ^ content
     "cry":      ["cry0.png"],                                         # T_T pleure
-    "uwu":      ["uwu0.png"],                                         # UwU
+    "uwu":      ["uwu0.png", "uwu1.png"],                             # UwU (clignement : le U devient un croissant)
     "ko":       ["ko0.png"],                                          # X_X K.O.
 }
 

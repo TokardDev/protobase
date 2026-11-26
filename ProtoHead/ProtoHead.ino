@@ -439,14 +439,14 @@ void drawPanic() {
   }
 }
 
-void drawTear();
+void drawFaceExtras();
 
 void render() {
   display->clearScreen();
   if (crashPhase)  drawCrash();
   else if (kpanic) drawPanic();
   else if (faceGlitchFrames) { rng = esp_random() | 1; drawGlitchFrame(30, false); }
-  else           { drawFace(); drawTear(); }
+  else           { drawFace(); drawFaceExtras(); }
   if (uploadMode) {  // petit point vert en haut côté nez (l'arrière des dalles est en partie caché)
     for (int y = 0; y < 2; y++)
       for (int x = PANEL_W - 2; x < PANEL_W; x++) {
@@ -557,44 +557,16 @@ struct CustomFace {
 CustomFace customFaces[FACE_COUNT];
 bool       isCustom[FACE_COUNT];
 
-// Face "pleure" : une goutte se détache sous l'oeil et tombe vers la joue, en boucle.
-// (seulement avec la face d'origine : une face envoyée par le téléphone n'a pas forcément de larme là)
-const uint8_t TEAR_X = 47, TEAR_FROM = 15, TEAR_TO = 20, TEAR_STEP_MS = 70;
-int8_t   tearY = -1;           // ligne du haut de la goutte qui tombe (-1 = pas de goutte)
-uint32_t nextTearStep = 0;
-
-void updateTear(uint32_t now) {
-  const bool active = face == FACE_CRY && pendingFace == face && !isCustom[FACE_CRY] && !kpanic && !crashPhase;
-  if (!active) {
-    if (tearY >= 0) { tearY = -1; dirty = true; }
-    return;
+// Détails asymétriques que le miroir des calques ne permet pas : dessinés sur UNE seule dalle.
+// (seulement avec les faces d'origine : une face envoyée par le téléphone n'a pas forcément la même bouche)
+// K.O. : la langue qui pend d'un côté de la bouche, sous un creux de la vague.
+void drawFaceExtras() {
+  if (face == FACE_KO && pendingFace == face && !isCustom[FACE_KO]) {
+    static const char *const TONGUE[] = {"######", "######", "######", ".####.", "..##.."};
+    for (int y = 0; y < 5; y++)
+      for (int x = 0; x < 6; x++)
+        if (TONGUE[y][x] == '#') display->drawPixelRGB888(48 + x, 26 + y, 255, 110, 140);  // dalle 0 seulement
   }
-  if (!reached(now, nextTearStep)) return;
-  if (tearY < 0) {
-    tearY = TEAR_FROM;
-    nextTearStep = now + TEAR_STEP_MS;
-  } else if (tearY < TEAR_TO) {
-    tearY++;
-    nextTearStep = now + TEAR_STEP_MS;
-  } else {
-    tearY = -1;
-    nextTearStep = now + 500 + esp_random() % 700;
-  }
-  dirty = true;
-}
-
-void drawTear() {
-  if (tearY < 0) return;
-  const Layer *l = faces[FACE_CRY].eye[0];  // même couleur que la larme sous l'oeil
-  const int t = constrain((TEAR_X - l->x0) * 256 / max(1, l->x1 - l->x0), 0, 256);
-  const uint8_t r = l->c0[0] + (l->c1[0] - l->c0[0]) * t / 256;
-  const uint8_t g = l->c0[1] + (l->c1[1] - l->c0[1]) * t / 256;
-  const uint8_t b = l->c0[2] + (l->c1[2] - l->c0[2]) * t / 256;
-  for (int dy = 0; dy < 2; dy++)
-    for (int dx = 0; dx < 2; dx++) {
-      putPixel(TEAR_X + dx, tearY + dy, r, g, b);
-      putPixel(SCREEN_W - 1 - (TEAR_X + dx), tearY + dy, r, g, b);
-    }
 }
 
 // Le serveur web est asynchrone : il gère plusieurs connexions à la fois (le navigateur
@@ -1050,7 +1022,6 @@ void loop() {
   updateEye(now);
   updateCrash(now);
   updateFaceGlitch(now);
-  updateTear(now);
   updatePanic(now);
   saveBrightnessIfDue(now);
   if (uploadMode) {
