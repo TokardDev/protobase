@@ -39,7 +39,13 @@ COVERAGE = 0.12        # part min d'une cellule 64x32 allumée pour allumer la L
 FACES = {
     "neutral": ["clin0.png", "clin1.png", "clin2.png"],
     "angry":   ["Fache.png", "Fache1.png", "Fache2.png"],
-    "uwu":     ["uwu0.png"],  # >w< : yeux déjà plissés, donc une seule image (pas de clignement)
+    "uwu":     ["uwu0.png"],    # >w< : yeux déjà plissés, donc une seule image (pas de clignement)
+    "happy":   ["happy0.png"],  # face cyan : oeil en croissant, bouche ondulée
+}
+
+# Écrans pleins : l'image entière devient un seul calque <nom>_screen, sans découpage.
+SCREENS = {
+    "bsod": "bsod.png",  # le gros ":(" ; le fond bleu est ajouté par le firmware
 }
 
 
@@ -68,6 +74,8 @@ def region(kind):
         r[:SPLIT_Y, :NOSE_X] = True
     elif kind == "nose":
         r[:SPLIT_Y, NOSE_X:] = True
+    elif kind == "full":
+        r[:, :] = True
     else:
         r[SPLIT_Y:, :] = True
     return r
@@ -142,6 +150,12 @@ def main():
         )
         for _, eye in eyes:
             preview.append([eye, mouth, nose])
+
+    for screen, f in SCREENS.items():
+        mask, colors = load(SRC / f)
+        layer = make_layer(mask, colors, "full")
+        out.append(c_layer(f"{screen}_screen", layer))
+        preview.append([layer])
 
     out.append("enum FaceId : uint8_t {")
     for i, face in enumerate(FACES):

@@ -62,7 +62,7 @@ struct ButtonAction { ActionType type; uint8_t face; };
 
 const ButtonAction BUTTONS[] = {
   { ACT_FACE, FACE_NEUTRAL },
-  { ACT_FACE, FACE_ANGRY },
+  { ACT_FACE, FACE_HAPPY },  // FACE_ANGRY existe aussi si tu veux la remettre
   { ACT_BSOD, 0 },
   { ACT_FACE, FACE_UWU },
 };
@@ -89,9 +89,7 @@ EyePhase eyePhase    = EYE_IDLE;
 uint32_t nextEyeStep = 0;
 uint32_t nextBlink   = 0;
 
-bool     bsod          = false;
-uint8_t  bsodPercent   = 0;
-uint32_t nextBsodStep  = 0;
+bool     bsod       = false;
 
 uint8_t  brightness = DEFAULT_BRIGHTNESS;
 bool     dirty      = true;   // l'écran doit être redessiné
@@ -125,24 +123,10 @@ void drawFace() {
   drawLayer(f.nose);
 }
 
-// Même écran sur chaque panneau, sans miroir, pour que le texte reste lisible des deux côtés.
+// Fond bleu + le gros ":(" (calque bsod_screen), en miroir comme les faces.
 void drawBsod() {
   display->fillScreenRGB888(0x00, 0x78, 0xD7);
-  display->setTextWrap(false);
-  display->setTextColor(display->color565(255, 255, 255));
-  for (int p = 0; p < PANEL_CHAIN; p++) {
-    const int ox = p * PANEL_W + 3;
-    display->setTextSize(2);
-    display->setCursor(ox, 1);
-    display->print(":(");
-    display->setTextSize(1);
-    display->setCursor(ox, 17);
-    display->print("Your proto");
-    display->setCursor(ox, 25);
-    display->print("died. ");
-    display->print(bsodPercent);
-    display->print('%');
-  }
+  drawLayer(&bsod_screen);
 }
 
 void render() {
@@ -196,17 +180,6 @@ void updateEye(uint32_t now) {
   dirty = true;
 }
 
-void updateBsod(uint32_t now) {
-  if (!bsod || !reached(now, nextBsodStep)) return;
-  if (bsodPercent >= 100) {
-    bsodPercent = 0;
-  } else {
-    bsodPercent = min(100, bsodPercent + 1 + (int)(esp_random() % 9));
-  }
-  nextBsodStep = now + (bsodPercent >= 100 ? 2000 : 300 + esp_random() % 500);
-  dirty = true;
-}
-
 /* ---------------------------------------------------------------------------
    Commandes du gant
    --------------------------------------------------------------------------- */
@@ -237,8 +210,6 @@ void handleButton(uint8_t button, bool longPress) {
 
     case ACT_BSOD:
       bsod = true;
-      bsodPercent = 0;
-      nextBsodStep = millis() + 800;
       dirty = true;
       break;
 
@@ -326,7 +297,6 @@ void loop() {
   const uint32_t now = millis();
   processPackets();
   updateEye(now);
-  updateBsod(now);
   if (dirty) render();
   delay(1);
 }

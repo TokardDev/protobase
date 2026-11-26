@@ -36,10 +36,12 @@ Each glove button is mapped in the `BUTTONS` (short press) and `LONG_PRESS` (hel
 
 | Button | Press | Hold |
 |---|---|---|
-| 0 | neutral face | cycle brightness |
-| 1 | angry face | – |
+| 0 | neutral face (purple) | cycle brightness |
+| 1 | happy face (cyan) | – |
 | 2 | BSOD | – |
-| 3 | `>w<` face | – |
+| 3 | `>w<` face (pink) | – |
+
+The angry face (orange) is still built into the firmware: put `FACE_ANGRY` in the table to use it.
 
 The eyes blink on their own at random intervals, and face changes happen while the eye is closed.
 
@@ -52,7 +54,7 @@ pip install pillow numpy
 python3 tools/png2layers.py --preview preview.png
 ```
 
-Each face has one PNG per blink step (open → closed). The mouth and the nose are taken from the first one. To add a face: draw the PNGs, add them to `FACES` in the script, run it again, then map the face to a button in `BUTTONS`.
+Each face has one PNG per blink step (open → closed). The mouth and the nose are taken from the first one. Full-screen images that shouldn't be split (like the BSOD `:(`) go in `SCREENS` instead. To add a face: draw the PNGs, add them to `FACES` in the script, run it again, then map the face to a button in `BUTTONS`.
 
 Thin lines get lost at 64x32: draw strokes at least ~40 px thick on the 2000x1000 canvas.
 
