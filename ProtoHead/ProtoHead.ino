@@ -27,6 +27,7 @@
 #include <ESPAsyncWebServer.h>  // lib "ESP Async WebServer" (ESP32Async) + "Async TCP" (ESP32Async)
 #include <DNSServer.h>
 #include <LittleFS.h>
+#include <Preferences.h>
 #include <esp_heap_caps.h>
 #if __has_include(<esp_mac.h>)
   #include <esp_mac.h>  // esp_read_mac (ailleurs que dans esp_system.h selon la version)
@@ -72,8 +73,12 @@ static_assert(!sameText(UPLOAD_PASSWORD, "change-moi-vraiment"), "Change le mot 
 /* ---------------------------------------------------------------------------
    Réglages
    --------------------------------------------------------------------------- */
-const uint8_t BRIGHTNESS_LEVELS[] = {30, 60, 90, 140, 200};  // 0-255
-const uint8_t DEFAULT_BRIGHTNESS  = 2;                      // index dans le tableau ci-dessus
+// Luminosité (0-255) par crans. Maintenir le bouton 0 monte d'un cran toutes les 250 ms,
+// le bouton 1 descend ; ça s'arrête aux extrémités (pas de retour au début : on ne voit
+// pas la visière quand on la porte). Tout le tableau se parcourt en ~2,5 s.
+const uint8_t BRIGHTNESS_LEVELS[] = {8, 16, 28, 44, 64, 90, 120, 155, 195, 240};
+const uint8_t BRIGHTNESS_COUNT    = sizeof(BRIGHTNESS_LEVELS);
+const uint8_t DEFAULT_BRIGHTNESS  = 5;  // index dans le tableau ci-dessus (90 = l'ancien réglage)
 
 const uint16_t BLINK_FRAME_MS   = 45;    // durée de chaque étape du clignement
 const uint32_t BLINK_MIN_MS     = 2500;  // intervalle aléatoire entre deux clignements
@@ -83,7 +88,7 @@ const uint32_t BLINK_MAX_MS     = 6000;
 const uint32_t UPLOAD_TIMEOUT_MS = 10 * 60000;  // le mode upload se coupe après 10 min sans activité
 
 // Ce que fait chaque bouton du gant (0..3), en appui court et en appui long.
-enum ActionType : uint8_t { ACT_NONE, ACT_FACE, ACT_PANIC, ACT_BRIGHTNESS, ACT_UPLOAD };
+enum ActionType : uint8_t { ACT_NONE, ACT_FACE, ACT_PANIC, ACT_BRIGHTER, ACT_DIMMER, ACT_UPLOAD };
 struct ButtonAction { ActionType type; uint8_t face; };
 
 const ButtonAction BUTTONS[] = {
@@ -93,8 +98,8 @@ const ButtonAction BUTTONS[] = {
   { ACT_FACE, FACE_UWU },
 };
 const ButtonAction LONG_PRESS[] = {
-  { ACT_BRIGHTNESS, 0 },  // maintenir le bouton 0 : luminosité suivante
-  { ACT_NONE, 0 },
+  { ACT_BRIGHTER, 0 },    // maintenir le bouton 0 : plus lumineux (jusqu'au max)
+  { ACT_DIMMER, 0 },      // maintenir le bouton 1 : moins lumineux (jusqu'au min)
   { ACT_NONE, 0 },
   { ACT_UPLOAD, 0 },      // maintenir le bouton 3 : allume / coupe le mode upload
 };
@@ -134,6 +139,8 @@ bool     panicCursor  = false;   // curseur clignotant une fois le panic fini
 uint32_t nextPanicStep = 0;
 
 uint8_t  brightness = DEFAULT_BRIGHTNESS;
+uint32_t saveBrightnessAt = 0;   // sauvegarde différée de la luminosité (0 = rien à sauver)
+Preferences prefs;
 bool     dirty      = true;   // l'écran doit être redessiné
 bool     uploadMode = false;  // WiFi d'upload actif
 int16_t  lastSeq    = -1;
@@ -579,10 +586,34 @@ void stopUpload() {
 /* ---------------------------------------------------------------------------
    Commandes du gant
    --------------------------------------------------------------------------- */
-void handleButton(uint8_t button, bool longPress) {
+// Monte (+1) ou descend (-1) d'un cran, sans boucler. Sauvegardé 3 s après le dernier changement.
+void changeBrightness(int step) {
+  const int next = constrain((int)brightness + step, 0, BRIGHTNESS_COUNT - 1);
+  if (next == brightness) {
+    Serial.printf("luminosité déjà au %s\n", step > 0 ? "maximum" : "minimum");
+    return;
+  }
+  brightness = next;
+  display->setBrightness8(BRIGHTNESS_LEVELS[brightness]);
+  saveBrightnessAt = millis() + 3000;
+  if (!saveBrightnessAt) saveBrightnessAt = 1;
+  Serial.printf("luminosité %u (cran %u/%u)\n", BRIGHTNESS_LEVELS[brightness], brightness + 1, BRIGHTNESS_COUNT);
+}
+
+void saveBrightnessIfDue(uint32_t now) {
+  if (!saveBrightnessAt || !reached(now, saveBrightnessAt)) return;
+  saveBrightnessAt = 0;
+  prefs.putUChar("bright", brightness);
+}
+
+// kind : 0 = appui court, 1 = appui long, 2 = bouton toujours maintenu (répétition).
+// (uint8_t et pas un enum : l'IDE Arduino génère les prototypes en haut du fichier)
+void handleButton(uint8_t button, uint8_t kind) {
   if (button >= BUTTON_COUNT) return;
-  const ButtonAction &a = longPress ? LONG_PRESS[button] : BUTTONS[button];
-  Serial.printf("bouton %u%s\n", button, longPress ? " (long)" : "");
+  const ButtonAction &a = kind == 0 ? BUTTONS[button] : LONG_PRESS[button];
+  // la répétition ne sert qu'à la luminosité : pas de mode upload allumé/éteint en boucle
+  if (kind == 2 && a.type != ACT_BRIGHTER && a.type != ACT_DIMMER) return;
+  if (kind != 2) Serial.printf("bouton %u%s\n", button, kind == 1 ? " (long)" : "");
 
   switch (a.type) {
     case ACT_NONE:
@@ -600,10 +631,12 @@ void handleButton(uint8_t button, bool longPress) {
       dirty = true;
       break;
 
-    case ACT_BRIGHTNESS:
-      brightness = (brightness + 1) % sizeof(BRIGHTNESS_LEVELS);
-      display->setBrightness8(BRIGHTNESS_LEVELS[brightness]);
-      Serial.printf("luminosité %u\n", BRIGHTNESS_LEVELS[brightness]);
+    case ACT_BRIGHTER:
+      changeBrightness(+1);
+      break;
+
+    case ACT_DIMMER:
+      changeBrightness(-1);
       break;
 
     case ACT_UPLOAD:
@@ -642,8 +675,9 @@ void processPackets() {
   while (xQueueReceive(rxQueue, &p, 0) == pdTRUE) {
     if (p.seq == lastSeq) continue;  // doublon (le gant envoie chaque appui plusieurs fois)
     lastSeq = p.seq;
-    if (p.cmd == CMD_BUTTON)     handleButton(p.arg, false);
-    if (p.cmd == CMD_LONG_PRESS) handleButton(p.arg, true);
+    if (p.cmd == CMD_BUTTON)     handleButton(p.arg, 0);
+    if (p.cmd == CMD_LONG_PRESS) handleButton(p.arg, 1);
+    if (p.cmd == CMD_REPEAT)     handleButton(p.arg, 2);
   }
 }
 
@@ -689,6 +723,9 @@ void setup() {
   rxQueue = xQueueCreate(8, sizeof(Packet));
   webQueue = xQueueCreate(4, sizeof(WebCmd));
 
+  prefs.begin("proto", false);  // réglages gardés en flash (NVS)
+  brightness = min<uint8_t>(prefs.getUChar("bright", DEFAULT_BRIGHTNESS), BRIGHTNESS_COUNT - 1);
+
   setupDisplay();  // en premier : les buffers DMA des dalles veulent de la mémoire pas encore fragmentée
   printMemory("après les dalles");
 
@@ -709,6 +746,7 @@ void loop() {
   checkRadio();
   updateEye(now);
   updatePanic(now);
+  saveBrightnessIfDue(now);
   if (uploadMode) {
     dns.processNextRequest();
     if (reached(now, uploadUntil)) stopUpload();

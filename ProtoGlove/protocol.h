@@ -14,6 +14,7 @@
 enum Command : uint8_t {
   CMD_BUTTON     = 1,  // arg = numéro du bouton appuyé (0..3). C'est la tête qui décide quoi en faire.
   CMD_LONG_PRESS = 2,  // arg = numéro du bouton maintenu (dans ce cas, pas de CMD_BUTTON)
+  CMD_REPEAT     = 3,  // arg = numéro du bouton toujours maintenu, envoyé à intervalle régulier
 };
 
 // Démarre le WiFi en station sur PROTO_CHANNEL, prêt pour l'ESP-NOW.

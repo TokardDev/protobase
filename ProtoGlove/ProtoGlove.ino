@@ -18,6 +18,7 @@ const uint8_t BUTTON_COUNT  = sizeof(BUTTON_PINS);
 
 const uint16_t DEBOUNCE_MS   = 25;
 const uint16_t LONG_PRESS_MS = 800;  // maintenu plus longtemps : appui long (et pas d'appui court)
+const uint16_t REPEAT_MS     = 250;  // puis un CMD_REPEAT toutes les 250 ms tant que c'est maintenu
 const uint8_t  REPEATS       = 3;    // le broadcast n'a pas d'accusé de réception : on envoie 3 fois
 
 const uint8_t BROADCAST[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -28,6 +29,7 @@ struct Button {
   uint32_t changedAt;   // date du dernier changement de lecture
   uint32_t pressedAt;   // date de l'appui validé
   bool     longSent;    // appui long déjà envoyé pour cet appui
+  uint32_t repeatAt;    // date du dernier appui long / répétition envoyé
 };
 Button buttons[BUTTON_COUNT];
 
@@ -42,7 +44,8 @@ void sendCommand(Command cmd, uint8_t index) {
     delay(5);
   }
   if (err != ESP_OK) Serial.printf("Envoi ESP-NOW refusé : %s\n", esp_err_to_name(err));
-  Serial.printf("bouton %u%s envoyé (seq %u)\n", index, cmd == CMD_LONG_PRESS ? " (long)" : "", seq);
+  Serial.printf("bouton %u%s envoyé (seq %u)\n", index,
+                cmd == CMD_LONG_PRESS ? " (long)" : cmd == CMD_REPEAT ? " (maintenu)" : "", seq);
 }
 
 void setup() {
@@ -50,7 +53,7 @@ void setup() {
 
   for (uint8_t i = 0; i < BUTTON_COUNT; i++) {
     pinMode(BUTTON_PINS[i], INPUT_PULLUP);
-    buttons[i] = {true, true, 0, 0, false};
+    buttons[i] = {true, true, 0, 0, false, 0};
   }
 
   startRadio();
@@ -93,7 +96,11 @@ void loop() {
       }
     } else if (!b.stable && !b.longSent && now - b.pressedAt >= LONG_PRESS_MS) {
       b.longSent = true;
+      b.repeatAt = now;
       sendCommand(CMD_LONG_PRESS, i);
+    } else if (!b.stable && b.longSent && now - b.repeatAt >= REPEAT_MS) {
+      b.repeatAt = now;
+      sendCommand(CMD_REPEAT, i);
     }
   }
   delay(2);
