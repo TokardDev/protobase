@@ -18,6 +18,7 @@
 #include <esp_wifi.h>
 #include <esp_arduino_version.h>
 #include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
+#include <Fonts/TomThumb.h>  // police 3x5 d'Adafruit GFX : 16 caractères par dalle
 
 #include "protocol.h"
 #include "faces.h"
@@ -57,13 +58,13 @@ const uint32_t BLINK_MIN_MS     = 2500;  // intervalle aléatoire entre deux cli
 const uint32_t BLINK_MAX_MS     = 6000;
 
 // Ce que fait chaque bouton du gant (0..3), en appui court et en appui long.
-enum ActionType : uint8_t { ACT_NONE, ACT_FACE, ACT_BSOD, ACT_BRIGHTNESS };
+enum ActionType : uint8_t { ACT_NONE, ACT_FACE, ACT_PANIC, ACT_BRIGHTNESS };
 struct ButtonAction { ActionType type; uint8_t face; };
 
 const ButtonAction BUTTONS[] = {
   { ACT_FACE, FACE_NEUTRAL },
   { ACT_FACE, FACE_HAPPY },  // FACE_ANGRY existe aussi si tu veux la remettre
-  { ACT_BSOD, 0 },
+  { ACT_PANIC, 0 },
   { ACT_FACE, FACE_UWU },
 };
 const ButtonAction LONG_PRESS[] = {
@@ -73,6 +74,26 @@ const ButtonAction LONG_PRESS[] = {
   { ACT_NONE, 0 },
 };
 const uint8_t BUTTON_COUNT = sizeof(BUTTONS) / sizeof(BUTTONS[0]);
+
+// Kernel panic : 16 caractères max par ligne, 5 lignes visibles par dalle.
+const char *const PANIC_LINES[] = {
+  "Kernel panic -",
+  "not syncing:",
+  "Attempted to",
+  "kill init!",
+  "exitcode=0x0b",
+  "CPU: 0 PID: 1",
+  "Comm: protod",
+  "Call Trace:",
+  " dump_stack+0x6d",
+  " panic+0x101/0x2",
+  " do_exit+0xb43/0",
+  " face_init+0x1f",
+  "---[ end Kernel",
+  "panic ]---",
+};
+const uint8_t PANIC_LINE_COUNT = sizeof(PANIC_LINES) / sizeof(PANIC_LINES[0]);
+const uint8_t PANIC_VISIBLE    = 5;
 
 /* ---------------------------------------------------------------------------
    État
@@ -89,7 +110,10 @@ EyePhase eyePhase    = EYE_IDLE;
 uint32_t nextEyeStep = 0;
 uint32_t nextBlink   = 0;
 
-bool     bsod       = false;
+bool     kpanic       = false;   // kernel panic affiché
+uint8_t  panicPrinted = 0;       // nombre de lignes déjà "imprimées"
+bool     panicCursor  = false;   // curseur clignotant une fois le panic fini
+uint32_t nextPanicStep = 0;
 
 uint8_t  brightness = DEFAULT_BRIGHTNESS;
 bool     dirty      = true;   // l'écran doit être redessiné
@@ -123,15 +147,30 @@ void drawFace() {
   drawLayer(f.nose);
 }
 
-// Fond bleu + le gros ":(" (calque bsod_screen), en miroir comme les faces.
-void drawBsod() {
-  display->fillScreenRGB888(0x00, 0x78, 0xD7);
-  drawLayer(&bsod_screen);
+// Les lignes défilent comme sur une console. Même texte sur chaque dalle,
+// sans miroir, pour qu'il reste lisible des deux côtés.
+void drawPanic() {
+  display->setFont(&TomThumb);
+  display->setTextWrap(false);
+  display->setTextColor(display->color565(200, 200, 200));
+  const uint8_t first = panicPrinted > PANIC_VISIBLE ? panicPrinted - PANIC_VISIBLE : 0;
+  for (int p = 0; p < PANEL_CHAIN; p++) {
+    const int ox = p * PANEL_W + 1;
+    for (uint8_t i = first; i < panicPrinted; i++) {
+      display->setCursor(ox, 5 + 6 * (i - first));  // y = ligne de base du texte
+      display->print(PANIC_LINES[i]);
+    }
+    if (panicCursor) {
+      const int line = panicPrinted - first - 1;
+      const int x = ox + 4 * strlen(PANIC_LINES[panicPrinted - 1]) + 1;
+      display->fillRect(x, 6 * line, 3, 5, display->color565(200, 200, 200));
+    }
+  }
 }
 
 void render() {
   display->clearScreen();
-  if (bsod) drawBsod();
+  if (kpanic) drawPanic();
   else      drawFace();
   display->flipDMABuffer();
   dirty = false;
@@ -148,7 +187,7 @@ void scheduleBlink(uint32_t now) {
 }
 
 void updateEye(uint32_t now) {
-  if (bsod) return;
+  if (kpanic) return;
   const uint8_t closed = FACES[face].eyeFrames - 1;
 
   if (eyePhase == EYE_IDLE) {
@@ -180,6 +219,18 @@ void updateEye(uint32_t now) {
   dirty = true;
 }
 
+void updatePanic(uint32_t now) {
+  if (!kpanic || !reached(now, nextPanicStep)) return;
+  if (panicPrinted < PANIC_LINE_COUNT) {
+    panicPrinted++;
+    nextPanicStep = now + 90 + esp_random() % 220;  // vitesse d'impression irrégulière
+  } else {
+    panicCursor = !panicCursor;                    // le système est figé, seul le curseur clignote
+    nextPanicStep = now + 500;
+  }
+  dirty = true;
+}
+
 /* ---------------------------------------------------------------------------
    Commandes du gant
    --------------------------------------------------------------------------- */
@@ -195,9 +246,9 @@ void handleButton(uint8_t button, bool longPress) {
     case ACT_FACE:
       if (a.face >= FACE_COUNT) return;
       pendingFace = a.face;
-      if (bsod) {
-        // sortie du BSOD : on "redémarre" avec l'oeil fermé qui s'ouvre
-        bsod = false;
+      if (kpanic) {
+        // sortie du kernel panic : on "redémarre" avec l'oeil fermé qui s'ouvre
+        kpanic = false;
         face = pendingFace;
         eyeFrame = FACES[face].eyeFrames - 1;
         eyePhase = EYE_OPENING;
@@ -208,8 +259,11 @@ void handleButton(uint8_t button, bool longPress) {
       }
       break;
 
-    case ACT_BSOD:
-      bsod = true;
+    case ACT_PANIC:
+      kpanic = true;
+      panicPrinted = 0;
+      panicCursor = false;
+      nextPanicStep = millis() + 150;
       dirty = true;
       break;
 
@@ -297,6 +351,7 @@ void loop() {
   const uint32_t now = millis();
   processPackets();
   updateEye(now);
+  updatePanic(now);
   if (dirty) render();
   delay(1);
 }

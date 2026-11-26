@@ -40,12 +40,12 @@ FACES = {
     "neutral": ["clin0.png", "clin1.png", "clin2.png"],
     "angry":   ["Fache.png", "Fache1.png", "Fache2.png"],
     "uwu":     ["uwu0.png"],    # >w< : yeux déjà plissés, donc une seule image (pas de clignement)
-    "happy":   ["happy0.png"],  # face cyan : oeil en croissant, bouche ondulée
+    "happy":   ["happy0.png", "happy1.png", "happy2.png"],  # cyan : oeil neutre retourné à la verticale, bouche ondulée
 }
 
 # Écrans pleins : l'image entière devient un seul calque <nom>_screen, sans découpage.
 SCREENS = {
-    "bsod": "bsod.png",  # le gros ":(" ; le fond bleu est ajouté par le firmware
+    # "nom": "fichier.png",
 }
 
 
