@@ -31,6 +31,15 @@
 #include "faces.h"
 #include "webui.h"
 
+#if __has_include("secrets.h")
+  #include "secrets.h"
+#else
+  #error "Copie ProtoHead/secrets.example.h en ProtoHead/secrets.h et choisis ton mot de passe WiFi"
+#endif
+static_assert(sizeof(UPLOAD_PASSWORD) - 1 >= 8, "UPLOAD_PASSWORD : 8 caractères minimum (WPA2)");
+constexpr bool sameText(const char *a, const char *b) { return *a == *b && (*a == 0 || sameText(a + 1, b + 1)); }
+static_assert(!sameText(UPLOAD_PASSWORD, "change-moi-vraiment"), "Change le mot de passe d'exemple dans secrets.h");
+
 /* ---------------------------------------------------------------------------
    Matrice
    --------------------------------------------------------------------------- */
@@ -65,7 +74,7 @@ const uint16_t BLINK_FRAME_MS   = 45;    // durée de chaque étape du clignemen
 const uint32_t BLINK_MIN_MS     = 2500;  // intervalle aléatoire entre deux clignements
 const uint32_t BLINK_MAX_MS     = 6000;
 
-#define UPLOAD_PASSWORD "protobase"            // mot de passe du WiFi d'upload (8 caractères min) : change-le
+// Le mot de passe du WiFi d'upload est dans secrets.h (hors du repo).
 const uint32_t UPLOAD_TIMEOUT_MS = 10 * 60000;  // le mode upload se coupe après 10 min sans activité
 
 // Ce que fait chaque bouton du gant (0..3), en appui court et en appui long.
@@ -445,8 +454,9 @@ void startUpload() {
   WiFi.macAddress(mac);
   char ssid[16];
   snprintf(ssid, sizeof(ssid), "Proto-%02X%02X", mac[4], mac[5]);
-  // même canal que l'ESP-NOW : le gant continue de fonctionner pendant l'upload
-  if (!WiFi.softAP(ssid, UPLOAD_PASSWORD, PROTO_CHANNEL)) {
+  // même canal que l'ESP-NOW : le gant continue de fonctionner pendant l'upload.
+  // 1 seul appareil connecté à la fois : si tu es dessus, personne d'autre ne peut entrer.
+  if (!WiFi.softAP(ssid, UPLOAD_PASSWORD, PROTO_CHANNEL, 0, 1)) {
     Serial.println("Échec du point d'accès WiFi");
     return;
   }
@@ -454,8 +464,7 @@ void startUpload() {
   uploadMode = true;
   touchUpload();
   dirty = true;
-  Serial.printf("Mode upload : WiFi \"%s\" (mot de passe \"%s\"), puis http://%s/\n",
-                ssid, UPLOAD_PASSWORD, WiFi.softAPIP().toString().c_str());
+  Serial.printf("Mode upload : WiFi \"%s\", puis http://%s/\n", ssid, WiFi.softAPIP().toString().c_str());
   printMemory("mode upload");
 }
 
