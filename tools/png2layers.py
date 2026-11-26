@@ -41,7 +41,7 @@ COVERAGE = 0.12        # part min d'une cellule 64x32 allumée pour allumer la L
 FACES = {
     "neutral": ["clin0.png", "clin1.png", "clin2.png"],
     "angry":   ["Fache.png", "Fache1.png", "Fache2.png"],
-    "uwu":     ["uwu0.png", "uwu1.png", "uwu2.png"],  # >w< : le chevron s'aplatit puis devient un trait
+    "uwu":     ["uwu0.png"],    # >w< (blush) : yeux déjà fermés, une seule image donc pas de clignement
     "happy":   ["happy0.png", "happy1.png", "happy2.png"],  # cyan : oeil neutre retourné à la verticale, bouche ondulée
 }
 
