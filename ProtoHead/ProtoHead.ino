@@ -563,10 +563,11 @@ void setupDisplay() {
 }
 
 void setupEspNow() {
+  WiFi.persistent(false);  // ne pas réécrire la config WiFi en flash à chaque mode upload
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
+  WiFi.setSleep(false);    // radio toujours à l'écoute, sinon des appuis peuvent se perdre
   esp_wifi_set_channel(PROTO_CHANNEL, WIFI_SECOND_CHAN_NONE);
-  esp_wifi_set_ps(WIFI_PS_NONE);  // radio toujours à l'écoute, sinon des appuis peuvent se perdre
 
   if (esp_now_init() != ESP_OK) {
     Serial.println("Échec init ESP-NOW, redémarrage");

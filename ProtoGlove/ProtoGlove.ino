@@ -17,7 +17,7 @@ const uint8_t BUTTON_PINS[] = {21, 19, 25, 33};  // bouton 0, 1, 2, 3
 const uint8_t BUTTON_COUNT  = sizeof(BUTTON_PINS);
 
 const uint16_t DEBOUNCE_MS   = 25;
-const uint16_t LONG_PRESS_MS = 800;  // au-delà, l'appui compte aussi comme appui long
+const uint16_t LONG_PRESS_MS = 800;  // maintenu plus longtemps : appui long (et pas d'appui court)
 const uint8_t  REPEATS       = 3;    // le broadcast n'a pas d'accusé de réception : on envoie 3 fois
 
 const uint8_t BROADCAST[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -83,9 +83,10 @@ void loop() {
       b.changedAt = now;
     } else if (r != b.stable && now - b.changedAt >= DEBOUNCE_MS) {
       b.stable = r;
-      if (!r) {  // front descendant = appui
+      if (!r) {               // appui : on attend de savoir si c'est court ou long
         b.pressedAt = now;
         b.longSent = false;
+      } else if (!b.longSent) {  // relâché avant LONG_PRESS_MS : appui court
         sendCommand(CMD_BUTTON, i);
       }
     } else if (!b.stable && !b.longSent && now - b.pressedAt >= LONG_PRESS_MS) {

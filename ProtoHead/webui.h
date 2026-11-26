@@ -51,7 +51,7 @@ canvas{width:100%;image-rendering:pixelated;background:#000;border-radius:6px;di
 // ⚠ Mêmes réglages que tools/png2layers.py
 const W=64,H=32,LUM_MIN=60,COVERAGE=0.12,SPLIT_Y=16,NOSE_X=56,MAX_EYES=4;
 const $=id=>document.getElementById(id);
-let layers=null, anim=null;
+let layers=null, anim=null, gen=0;
 
 function status(msg,kind){const s=$('status');s.textContent=msg;s.className=kind||'';}
 
@@ -92,15 +92,21 @@ function makeLayer(a,kind){
   return {m,x0,x1,c0:avg(x0,x0+span),c1:avg(x1-span+1,x1+1)};
 }
 
-function loadImage(file){
-  return new Promise((ok,ko)=>{const img=new Image();img.onload=()=>ok(img);img.onerror=()=>ko(file.name);img.src=URL.createObjectURL(file);});
+// Pixels bruts du PNG, sans correction de couleur du navigateur (comme PIL côté Python)
+async function loadImage(file){
+  if(window.createImageBitmap){
+    try{return await createImageBitmap(file,{colorSpaceConversion:'none',premultiplyAlpha:'none'});}catch(e){}
+  }
+  const url=URL.createObjectURL(file);
+  try{return await new Promise((ok,ko)=>{const img=new Image();img.onload=()=>ok(img);img.onerror=()=>ko(file.name);img.src=url;});}
+  finally{URL.revokeObjectURL(url);}
 }
 
 async function buildLayers(files){
   const eyes=[];let mouth,nose;
   for(const [i,f] of files.entries()){
     const img=await loadImage(f), c=document.createElement('canvas');
-    c.width=img.naturalWidth;c.height=img.naturalHeight;
+    c.width=img.naturalWidth||img.width;c.height=img.naturalHeight||img.height;
     const g=c.getContext('2d');g.drawImage(img,0,0);
     const a=analyze(g.getImageData(0,0,c.width,c.height).data,c.width,c.height);
     eyes.push(makeLayer(a,'eye'));
@@ -134,6 +140,7 @@ function encode(L){
   return out.map(b=>b.toString(16).padStart(2,'0')).join('');
 }
 
+function slot(){const v=$('slot').value;if(v==='')throw new Error('liste des faces pas chargée');return v;}
 async function post(path,body){
   const r=await fetch(path,{method:'POST',headers:{'Content-Type':'text/plain'},body:body||''});
   const t=await r.text();if(!r.ok)throw new Error(t||r.status);return t;
@@ -152,25 +159,27 @@ async function refresh(quiet){
 
 $('files').onchange=async e=>{
   const files=[...e.target.files].sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}));
+  const my=++gen;  // si on rechoisit des fichiers pendant une conversion, seule la dernière compte
   clearInterval(anim);layers=null;$('send').disabled=true;
   if(!files.length)return;
   if(files.length>MAX_EYES){status(MAX_EYES+' PNG maximum','err');return;}
   try{
-    status('Conversion…');layers=await buildLayers(files);
-    let f=0;drawPreview(layers,0);
+    status('Conversion…');const L=await buildLayers(files);
+    if(my!==gen)return;
+    layers=L;let f=0;drawPreview(layers,0);
     if(layers.eyes.length>1)anim=setInterval(()=>{f=(f+1)%layers.eyes.length;drawPreview(layers,f);},400);
     $('send').disabled=false;status(files.length+' image(s) prête(s)');
-  }catch(err){status('Image illisible : '+err,'err');}
+  }catch(err){if(my===gen)status('Image illisible : '+err,'err');}
 };
 
 $('send').onclick=async()=>{
-  try{status('Envoi…');await post('/face?id='+$('slot').value,encode(layers));
+  try{status('Envoi…');await post('/face?id='+slot(),encode(layers));
     status('Face envoyée et affichée','ok');refresh(true);}catch(e){status('Échec : '+e.message,'err');}
 };
-$('show').onclick=async()=>{try{await post('/show?id='+$('slot').value);status('Affichée','ok');}catch(e){status('Échec : '+e.message,'err');}};
+$('show').onclick=async()=>{try{await post('/show?id='+slot());status('Affichée','ok');}catch(e){status('Échec : '+e.message,'err');}};
 $('reset').onclick=async()=>{
   if(!confirm('Remettre cette face d\'origine ?'))return;
-  try{await post('/reset?id='+$('slot').value);status('Face d\'origine remise','ok');refresh(true);}catch(e){status('Échec : '+e.message,'err');}
+  try{await post('/reset?id='+slot());status('Face d\'origine remise','ok');refresh(true);}catch(e){status('Échec : '+e.message,'err');}
 };
 refresh();
 </script></body></html>)HTML";

@@ -33,7 +33,7 @@ Free GPIOs on the shield's breakout header: 13, 14, 23, 32, 33 (input/output) an
 
 ## Buttons
 
-Each glove button is mapped in the `BUTTONS` (short press) and `LONG_PRESS` (held 0.8 s) tables at the top of `ProtoHead.ino`:
+Each glove button is mapped in the `BUTTONS` (short press) and `LONG_PRESS` (held 0.8 s) tables at the top of `ProtoHead.ino`. A short press is sent when the button is released, so a long press never triggers the short-press action:
 
 | Button | Press | Hold |
 |---|---|---|
