@@ -697,6 +697,7 @@ void loop() {
   const uint32_t now = millis();
   processPackets();
   processWebCommands();
+  checkRadio();
   updateEye(now);
   updatePanic(now);
   if (uploadMode) {

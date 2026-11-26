@@ -76,6 +76,7 @@ void setup() {
 
 void loop() {
   const uint32_t now = millis();
+  checkRadio();
   for (uint8_t i = 0; i < BUTTON_COUNT; i++) {
     Button &b = buttons[i];
     const bool r = digitalRead(BUTTON_PINS[i]);

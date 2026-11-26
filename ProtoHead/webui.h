@@ -142,13 +142,22 @@ function encode(L){
 
 function slot(){const v=$('slot').value;if(v==='')throw new Error('liste des faces pas chargée');return v;}
 async function post(path,body){
-  const r=await fetch(path,{method:'POST',headers:{'Content-Type':'text/plain'},body:body||''});
+  const r=await fetchRetry(path,{method:'POST',headers:{'Content-Type':'text/plain'},body:body||''},2);
   const t=await r.text();if(!r.ok)throw new Error(t||r.status);return t;
+}
+
+// fetch avec délai max + nouvelles tentatives (la radio de l'ESP32 peut perdre un paquet)
+async function fetchRetry(url,opts,tries=4){
+  for(let i=1;;i++){
+    const ctl=new AbortController(), t=setTimeout(()=>ctl.abort(),5000);
+    try{const r=await fetch(url,{...opts,signal:ctl.signal,cache:'no-store'});clearTimeout(t);return r;}
+    catch(e){clearTimeout(t);if(i>=tries)throw e;status('Nouvel essai ('+i+'/'+(tries-1)+')…');await new Promise(ok=>setTimeout(ok,500*i));}
+  }
 }
 
 async function refresh(quiet){
   try{
-    const r=await (await fetch('/faces')).json(), sel=$('slot'), cur=sel.value;
+    const r=await (await fetchRetry('/faces')).json(), sel=$('slot'), cur=sel.value;
     sel.innerHTML='';
     for(const f of r.faces){const o=document.createElement('option');o.value=f.id;
       o.textContent=f.name+(f.custom?' (perso)':'');sel.appendChild(o);}
