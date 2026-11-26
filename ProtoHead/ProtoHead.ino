@@ -530,15 +530,22 @@ void handleButton(uint8_t button, bool longPress) {
   #define RECV_CB_ARGS const uint8_t *mac, const uint8_t *data, int len
 #endif
 
+volatile uint32_t rxIgnored = 0;  // paquets ESP-NOW reçus mais pas pour nous (diagnostic)
+
 void onReceive(RECV_CB_ARGS) {
-  if (len != sizeof(Packet)) return;
   Packet p;
+  if (len != sizeof(Packet)) { rxIgnored++; return; }
   memcpy(&p, data, sizeof(p));
-  if (p.magic != PROTO_MAGIC || p.id != PROTO_ID) return;
+  if (p.magic != PROTO_MAGIC || p.id != PROTO_ID) { rxIgnored++; return; }
   xQueueSend(rxQueue, &p, 0);
 }
 
 void processPackets() {
+  static uint32_t ignoredShown = 0;
+  if (rxIgnored != ignoredShown) {
+    ignoredShown = rxIgnored;
+    Serial.printf("ESP-NOW : %u paquet(s) ignoré(s) (mauvais format ou PROTO_ID différent)\n", (unsigned)ignoredShown);
+  }
   Packet p;
   while (xQueueReceive(rxQueue, &p, 0) == pdTRUE) {
     if (p.seq == lastSeq) continue;  // doublon (le gant envoie chaque appui plusieurs fois)
@@ -570,11 +577,7 @@ void setupDisplay() {
 }
 
 void setupEspNow() {
-  WiFi.persistent(false);  // ne pas réécrire la config WiFi en flash à chaque mode upload
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect();
-  WiFi.setSleep(false);    // radio toujours à l'écoute, sinon des appuis peuvent se perdre
-  esp_wifi_set_channel(PROTO_CHANNEL, WIFI_SECOND_CHAN_NONE);
+  startRadio();
 
   if (esp_now_init() != ESP_OK) {
     Serial.println("Échec init ESP-NOW, redémarrage");

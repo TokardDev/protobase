@@ -35,10 +35,13 @@ uint8_t seq;
 
 void sendCommand(Command cmd, uint8_t index) {
   Packet p = {PROTO_MAGIC, PROTO_ID, ++seq, cmd, index};
+  esp_err_t err = ESP_OK;
   for (uint8_t i = 0; i < REPEATS; i++) {
-    esp_now_send(BROADCAST, (const uint8_t *)&p, sizeof(p));
+    const esp_err_t e = esp_now_send(BROADCAST, (const uint8_t *)&p, sizeof(p));
+    if (e != ESP_OK) err = e;
     delay(5);
   }
+  if (err != ESP_OK) Serial.printf("Envoi ESP-NOW refusé : %s\n", esp_err_to_name(err));
   Serial.printf("bouton %u%s envoyé (seq %u)\n", index, cmd == CMD_LONG_PRESS ? " (long)" : "", seq);
 }
 
@@ -50,9 +53,7 @@ void setup() {
     buttons[i] = {true, true, 0, 0, false};
   }
 
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect();
-  esp_wifi_set_channel(PROTO_CHANNEL, WIFI_SECOND_CHAN_NONE);
+  startRadio();
 
   if (esp_now_init() != ESP_OK) {
     Serial.println("Échec init ESP-NOW, redémarrage");
@@ -62,7 +63,7 @@ void setup() {
 
   esp_now_peer_info_t peer = {};
   memcpy(peer.peer_addr, BROADCAST, 6);
-  peer.channel = PROTO_CHANNEL;
+  peer.channel = 0;  // 0 = canal actuel de la radio (réglé par startRadio)
   peer.ifidx   = WIFI_IF_STA;
   peer.encrypt = false;
   if (esp_now_add_peer(&peer) != ESP_OK) {
